@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  monte-carlo-web:
+    build: .
+    container_name: monte-carlo-simulator
+    ports:
+      - "5050:5050"
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=production
+    volumes:
+      - ./backend:/app/backend
+      - ./frontend:/app/frontend
+    networks:
+      - monte-carlo-network
+
+networks:
+  monte-carlo-network:
+    driver: bridge
