@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, send_file
 from flask_cors import CORS
 from monte_carlo import MonteCarloSimulator
 import json
@@ -7,6 +7,9 @@ import numpy as np
 import secrets
 import uuid
 from datetime import datetime, timedelta
+import zipfile
+import io
+import base64
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
@@ -327,6 +330,227 @@ def reset():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== 新增：下载 ZIP 功能 ====================
+
+def format_cdf_fit_details(fit_result, fit_type):
+    """格式化 CDF 拟合详情"""
+    lines = []
+    lines.append("="*70)
+    lines.append(f"  CDF {'Forward' if fit_type == 'forward' else 'Inverse'} Fit Details")
+    lines.append("="*70)
+    lines.append("")
+    lines.append(f"Fit Type: {'Result → CDF' if fit_type == 'forward' else 'CDF → Result'}")
+    lines.append(f"Degree: {fit_result['degree']}")
+    lines.append(f"R² Score: {fit_result['r_squared']:.8f}")
+    lines.append(f"RMSE: {fit_result['rmse']:.8f}")
+    lines.append("")
+    lines.append("Polynomial Coefficients (highest to lowest degree):")
+    
+    coeffs = fit_result['coefficients']
+    for i, coeff in enumerate(coeffs):
+        power = fit_result['degree'] - i
+        lines.append(f"  {'a' if fit_type == 'forward' else 'b'}{power} = {coeff:.15e}")
+    
+    lines.append("")
+    lines.append("Polynomial Formula:")
+    
+    if fit_type == 'forward':
+        func_parts = []
+        for i, coeff in enumerate(coeffs):
+            power = fit_result['degree'] - i
+            if power == 0:
+                func_parts.append(f"{coeff:.6e}")
+            elif power == 1:
+                func_parts.append(f"{coeff:.6e}*x")
+            else:
+                func_parts.append(f"{coeff:.6e}*x^{power}")
+        lines.append(f"  CDF(x) = {' + '.join(func_parts).replace('+ -', '- ')}")
+    else:
+        func_parts = []
+        for i, coeff in enumerate(coeffs):
+            power = fit_result['degree'] - i
+            if power == 0:
+                func_parts.append(f"{coeff:.6e}")
+            elif power == 1:
+                func_parts.append(f"{coeff:.6e}*p")
+            else:
+                func_parts.append(f"{coeff:.6e}*p^{power}")
+        lines.append(f"  x(p) = {' + '.join(func_parts).replace('+ -', '- ')}")
+    
+    lines.append("")
+    lines.append("="*70)
+    
+    return "\n".join(lines)
+
+
+def format_sensitivity_csv(sensitivity_results):
+    """格式化敏感性分析为 CSV"""
+    lines = []
+    lines.append("Rank,Variable,Correlation,Abs_Correlation,P_Value")
+    
+    # 按绝对相关系数排序
+    sorted_vars = sorted(sensitivity_results.items(), 
+                        key=lambda x: x[1]['abs_correlation'], 
+                        reverse=True)
+    
+    for rank, (var_name, data) in enumerate(sorted_vars, 1):
+        lines.append(f"{rank},{var_name},{data['correlation']:.6f},"
+                    f"{data['abs_correlation']:.6f},{data['p_value']:.6e}")
+    
+    return "\n".join(lines)
+
+
+@app.route('/api/download_csv_zip', methods=['POST'])
+def download_csv_zip():
+    """下载 CSV ZIP 包"""
+    try:
+        simulator = get_user_simulator()
+        
+        if simulator.result is None:
+            return jsonify({'error': '请先运行模拟'}), 400
+        
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            # 添加 CSV
+            csv_content = simulator.export_to_csv()
+            zf.writestr('raw_data.csv', csv_content)
+        
+        zip_buffer.seek(0)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'monte_carlo_data_csv_{timestamp}.zip'
+        
+        return send_file(zip_buffer, mimetype='application/zip',
+                        as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/download_json_zip', methods=['POST'])
+def download_json_zip():
+    """下载 JSON ZIP 包"""
+    try:
+        simulator = get_user_simulator()
+        
+        if simulator.result is None:
+            return jsonify({'error': '请先运行模拟'}), 400
+        
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            # 添加 JSON
+            json_content = simulator.export_to_json()
+            zf.writestr('data.json', json_content)
+        
+        zip_buffer.seek(0)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'monte_carlo_data_json_{timestamp}.zip'
+        
+        return send_file(zip_buffer, mimetype='application/zip',
+                        as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/download_report_zip', methods=['POST'])
+def download_report_zip():
+    """下载分析报告 ZIP 包"""
+    try:
+        simulator = get_user_simulator()
+        
+        if simulator.result is None:
+            return jsonify({'error': '请先运行模拟'}), 400
+        
+        data = request.json
+        confidence_levels = data.get('confidence_levels', [0.95, 0.99])
+        
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            # 主报告
+            report = simulator.generate_report(confidence_levels)
+            zf.writestr('analysis_report.txt', report)
+            
+            # CDF Forward Fit 详细信息
+            if simulator.cdf_fit_result:
+                forward_fit = format_cdf_fit_details(simulator.cdf_fit_result, 'forward')
+                zf.writestr('cdf_forward_fit.txt', forward_fit)
+            
+            # CDF Inverse Fit 详细信息
+            if simulator.cdf_inverse_fit_result:
+                inverse_fit = format_cdf_fit_details(simulator.cdf_inverse_fit_result, 'inverse')
+                zf.writestr('cdf_inverse_fit.txt', inverse_fit)
+        
+        zip_buffer.seek(0)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'monte_carlo_report_{timestamp}.zip'
+        
+        return send_file(zip_buffer, mimetype='application/zip',
+                        as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
+
+@app.route('/api/download_full_zip', methods=['POST'])
+def download_full_zip():
+    """下载完整报告（含图表）ZIP 包"""
+    try:
+        simulator = get_user_simulator()
+        
+        if simulator.result is None:
+            return jsonify({'error': '请先运行模拟'}), 400
+        
+        data = request.json
+        confidence_levels = data.get('confidence_levels', [0.95, 0.99])
+        
+        # 如果图表还没生成，先生成
+        if 'result_plot' not in simulator.chart_cache:
+            simulator.chart_cache['result_plot'] = simulator.plot_result()
+        if 'pareto' not in simulator.chart_cache and simulator.sensitivity_results:
+            simulator.chart_cache['pareto'] = simulator.plot_pareto_chart()
+        if 'tornado' not in simulator.chart_cache and simulator.sensitivity_results:
+            simulator.chart_cache['tornado'] = simulator.plot_tornado_chart()
+        
+        # 生成变量分布图
+        for var_name, var in simulator.variables.items():
+            cache_key = f'var_dist_{var_name}'
+            if cache_key not in simulator.chart_cache:
+                simulator.chart_cache[cache_key] = var.plot_distribution()
+        
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            # 文本报告
+            report = simulator.generate_report(confidence_levels)
+            zf.writestr('analysis_report.txt', report)
+            
+            # 图表 PNG 文件
+            if 'result_plot' in simulator.chart_cache:
+                img_bytes = base64.b64decode(simulator.chart_cache['result_plot'])
+                zf.writestr('charts/result_distribution.png', img_bytes)
+            
+            if 'pareto' in simulator.chart_cache:
+                img_bytes = base64.b64decode(simulator.chart_cache['pareto'])
+                zf.writestr('charts/pareto_chart.png', img_bytes)
+            
+            if 'tornado' in simulator.chart_cache:
+                img_bytes = base64.b64decode(simulator.chart_cache['tornado'])
+                zf.writestr('charts/tornado_chart.png', img_bytes)
+            
+            # 变量分布图
+            for var_name, var in simulator.variables.items():
+                cache_key = f'var_dist_{var_name}'
+                if cache_key in simulator.chart_cache:
+                    img_bytes = base64.b64decode(simulator.chart_cache[cache_key])
+                    zf.writestr(f'charts/variables/{var_name}_distribution.png', img_bytes)
+        
+        zip_buffer.seek(0)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'monte_carlo_full_{timestamp}.zip'
+        
+        return send_file(zip_buffer, mimetype='application/zip',
+                        as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5050, debug=True)

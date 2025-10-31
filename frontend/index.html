@@ -464,6 +464,44 @@
             color: #2D2D2D;
             z-index: 1;
         }
+
+        /* 下拉菜单样式 */
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            margin-top: 5px;
+            background: white;
+            border: 1px solid #E5E5E5;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            min-width: 240px;
+            z-index: 1000;
+            overflow: hidden;
+        }
+
+        .dropdown-menu a {
+            display: block;
+            padding: 12px 16px;
+            color: #2D2D2D;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+            border-bottom: 1px solid #F5F5F5;
+        }
+
+        .dropdown-menu a:last-child {
+            border-bottom: none;
+        }
+
+        .dropdown-menu a:hover {
+            background: #F5F5F5;
+            color: #C47C4A;
+        }
+
+        .dropdown-menu a:active {
+            background: #E5E5E5;
+        }
     </style>
 </head>
 <body>
@@ -769,16 +807,31 @@
                 <div id="chartResults" class="result-container" style="display: none;"></div>
             </div>
 
-            <!-- Step 4: Generate Report -->
+            <!-- Step 4: Analysis & Download -->
             <div class="step">
-                <h2>Step 4: Generate Report</h2>
+                <h2>Step 4: Analysis & Download</h2>
                 
                 <div class="help-text" style="margin-bottom: 15px;">
-                    Generate a comprehensive text report including statistics, CDF polynomial fit, and sensitivity analysis
+                    Generate analysis report and download simulation data
                 </div>
 
                 <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
                     <button onclick="generateReport()">Generate Report</button>
+                    
+                    <!-- 下载按钮下拉菜单 -->
+                    <div style="position: relative;">
+                        <button id="downloadBtn" onclick="toggleDownloadMenu()" style="background: #52A574; display: flex; align-items: center; gap: 8px;">
+                            📥 Download Data
+                            <span style="font-size: 0.8em;">▼</span>
+                        </button>
+                        <div id="downloadMenu" class="dropdown-menu" style="display: none;">
+                            <a href="#" onclick="downloadCSV(); return false;">📄 Raw Data (CSV)</a>
+                            <a href="#" onclick="downloadJSON(); return false;">📋 Raw Data (JSON)</a>
+                            <a href="#" onclick="downloadReport(); return false;">📊 Analysis Report</a>
+                            <a href="#" onclick="downloadFull(); return false;">📦 Full Report with Charts</a>
+                        </div>
+                    </div>
+                    
                     <div id="reportStatus" style="display: none; flex: 1; min-width: 300px;"></div>
                 </div>
 
@@ -1209,6 +1262,98 @@
             .catch(error => {
                 showStatus('Request failed: ' + error.message, 'error');
             });
+        }
+
+        // ==================== 下载功能 ====================
+        
+        // 切换下拉菜单显示
+        function toggleDownloadMenu() {
+            const menu = document.getElementById('downloadMenu');
+            menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // 点击页面其他地方关闭下拉菜单
+        document.addEventListener('click', function(event) {
+            const btn = document.getElementById('downloadBtn');
+            const menu = document.getElementById('downloadMenu');
+            if (btn && menu && !btn.contains(event.target) && !menu.contains(event.target)) {
+                menu.style.display = 'none';
+            }
+        });
+
+        // 通用下载函数
+        async function downloadFile(endpoint, filename) {
+            showLocalStatus('reportStatus', '📥 Preparing download...', 'info', true);
+            showStatus('Preparing download, please wait...', 'info');
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Download failed');
+                }
+
+                // 获取文件 blob
+                const blob = await response.blob();
+                
+                // 创建下载链接
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename || 'download.zip';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+
+                showLocalStatus('reportStatus', '✅ Download complete!', 'success', false);
+                showStatus('Download completed successfully', 'success');
+                
+                // 3秒后隐藏状态
+                setTimeout(() => {
+                    hideLocalStatus('reportStatus');
+                }, 3000);
+
+            } catch (error) {
+                showLocalStatus('reportStatus', '❌ Download failed: ' + error.message, 'error', false);
+                showStatus('Download failed: ' + error.message, 'error');
+            }
+
+            // 关闭下拉菜单
+            document.getElementById('downloadMenu').style.display = 'none';
+        }
+
+        // 下载 CSV
+        function downloadCSV() {
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+            downloadFile('/api/download_csv_zip', `monte_carlo_data_csv_${timestamp}.zip`);
+        }
+
+        // 下载 JSON
+        function downloadJSON() {
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+            downloadFile('/api/download_json_zip', `monte_carlo_data_json_${timestamp}.zip`);
+        }
+
+        // 下载报告
+        function downloadReport() {
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+            downloadFile('/api/download_report_zip', `monte_carlo_report_${timestamp}.zip`);
+        }
+
+        // 下载完整包
+        function downloadFull() {
+            const now = new Date();
+            const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+            downloadFile('/api/download_full_zip', `monte_carlo_full_${timestamp}.zip`);
         }
     </script>
 </body>

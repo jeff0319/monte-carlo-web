@@ -9,6 +9,8 @@ from typing import Callable, List, Dict, Tuple, Optional
 import warnings
 import io
 import base64
+import json
+from datetime import datetime
 warnings.filterwarnings('ignore')
 
 # 设置中文字体
@@ -240,6 +242,7 @@ class Variable:
         # 显示原始数据
         if self.input_mode == 'data':
             if len(self.raw_data) <= 30:
+                # 小样本：使用散点图
                 max_pdf = np.max(pdf)
                 y_base = 0
                 y_jitter = np.random.normal(0, 0.005 * max_pdf, len(self.raw_data))
@@ -249,6 +252,7 @@ class Variable:
                 ax.set_ylim(y_base - 0.05 * max_pdf, max_pdf * 1.1)
                 ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5, zorder=2)
             else:
+                # 大样本：使用直方图
                 ax.hist(self.raw_data, bins=min(30, len(self.raw_data)//3), 
                        density=True, alpha=0.5, label='Raw Data', 
                        color='steelblue', edgecolor='darkblue', zorder=2)
@@ -272,216 +276,342 @@ class Variable:
 
 class MonteCarloSimulator:
     """
-    Monte Carlo模拟器主类
+    Monte Carlo 模拟器主类
     """
     
     def __init__(self):
         self.variables = {}
         self.result = None
-        self.result_name = None
-        self.confidence_levels = [0.95, 0.99]
-        self.sensitivity_results = None
+        self.result_name = 'Result'
         self.formula_str = None
-        # 图表缓存
-        self.chart_cache = {}
-        # CDF拟合相关
-        self.cdf_fit_degree = 5
+        self.confidence_levels = [0.95, 0.99]  # 默认置信水平
+        self.sensitivity_results = None
         self.cdf_fit_result = None
+        self.cdf_inverse_fit_result = None  # 新增：反向CDF拟合
+        self.cdf_fit_degree = 5
+        self.result_samples = None  # 用于存储采样的结果数据
+        self.var_samples = None  # 用于存储采样的变量数据
+        self.chart_cache = {}  # 图表缓存
     
-    def add_variable(self, name: str, data: Optional[List[float]] = None, 
-                     mean: Optional[float] = None, std: Optional[float] = None,
-                     dist_type: str = 'normal', df: Optional[float] = None,
-                     min_value: Optional[float] = None, max_value: Optional[float] = None):
+    def add_variable(self, name: str, data: Optional[np.ndarray] = None,
+                    mean: Optional[float] = None, std: Optional[float] = None,
+                    dist_type: str = 'norm', df: Optional[float] = None,
+                    min_value: Optional[float] = None, max_value: Optional[float] = None):
         """
-        添加变量
-        
-        Parameters:
-        -----------
-        dist_type: 'normal' 或 't' (会自动转换为内部使用的 'norm' 或 't')
+        添加一个变量
         """
-        # 将 'normal' 转换为内部使用的 'norm'
+        # 标准化 dist_type
         if dist_type == 'normal':
-            internal_dist = 'norm'
-        elif dist_type == 'norm':
-            internal_dist = 'norm'  # 兼容旧代码
-        elif dist_type == 't':
-            internal_dist = 't'
-        else:
-            raise ValueError("dist_type必须是'normal'或't'")
+            dist_type = 'norm'
         
-        if data is not None:
-            var = Variable(name, data=np.array(data), min_value=min_value, max_value=max_value)
-            var.fit_distribution(internal_dist)
-        elif mean is not None and std is not None:
-            var = Variable(name, mean=mean, std=std, dist_type=internal_dist, df=df, 
-                         min_value=min_value, max_value=max_value)
-        else:
-            raise ValueError("必须提供data或者(mean和std)")
+        var = Variable(name, data=data, mean=mean, std=std, dist_type=dist_type, 
+                      df=df, min_value=min_value, max_value=max_value)
+        
+        # 如果是原始数据输入，进行分布拟合
+        if var.input_mode == 'data':
+            var.fit_distribution(dist_type)
         
         self.variables[name] = var
     
-    def add_variables_from_json(self, json_data: dict):
+    def add_variables_from_json(self, json_data):
         """
-        从JSON批量添加变量
+        从JSON数据批量添加变量
+        
+        支持两种格式:
+        1. 数组格式: [{name: "var_A", input_mode: "params", ...}, ...]
+        2. 对象格式: {"var_A": {type: "params", ...}, "var_B": {...}}
         
         Parameters:
         -----------
-        json_data : dict
-            JSON格式的变量定义
-            
-        示例格式:
-        {
-            "var_A": {
-                "type": "data",
-                "values": [10.5, 11.2, 9.8],
-                "distribution": "normal",
-                "min_limit": 8.0,
-                "max_limit": 15.0
-            },
-            "var_B": {
-                "type": "params",
-                "mean": 100,
-                "std": 5,
-                "distribution": "t",
-                "df": 20,
-                "min_limit": 85,
-                "max_limit": 115
-            }
-        }
+        json_data : List[Dict] or Dict
+            包含变量定义的JSON数组或对象
         """
-        for var_name, var_config in json_data.items():
-            # 验证必填字段
-            if 'type' not in var_config:
-                raise ValueError(f"变量 '{var_name}' 缺少必填字段 'type'")
-            if 'distribution' not in var_config:
-                raise ValueError(f"变量 '{var_name}' 缺少必填字段 'distribution'")
+        # 如果是对象格式，转换为数组格式
+        if isinstance(json_data, dict):
+            # 对象格式: {"var_A": {...}, "var_B": {...}}
+            var_list = []
+            for var_name, var_config in json_data.items():
+                if isinstance(var_config, dict):
+                    var_config['name'] = var_name
+                    # 兼容旧格式: type -> input_mode
+                    if 'type' in var_config and 'input_mode' not in var_config:
+                        var_config['input_mode'] = var_config['type']
+                    # 兼容旧格式: values -> data
+                    if 'values' in var_config and 'data' not in var_config:
+                        var_config['data'] = var_config['values']
+                    # 兼容旧格式: distribution -> dist_type
+                    if 'distribution' in var_config and 'dist_type' not in var_config:
+                        var_config['dist_type'] = var_config['distribution']
+                    # 兼容旧格式: min_limit -> min_value, max_limit -> max_value
+                    if 'min_limit' in var_config and 'min_value' not in var_config:
+                        var_config['min_value'] = var_config['min_limit']
+                    if 'max_limit' in var_config and 'max_value' not in var_config:
+                        var_config['max_value'] = var_config['max_limit']
+                    var_list.append(var_config)
+            json_data = var_list
+        
+        # 处理数组格式
+        for var_def in json_data:
+            name = var_def.get('name')
+            if not name:
+                raise ValueError("每个变量必须有name字段")
             
-            var_type = var_config['type']
-            distribution = var_config['distribution']
+            input_mode = var_def.get('input_mode')
+            dist_type = var_def.get('dist_type', 'norm')
+            min_value = var_def.get('min_value')
+            max_value = var_def.get('max_value')
             
-            # 验证分布类型
-            if distribution not in ['normal', 't']:
-                raise ValueError(f"变量 '{var_name}' 的 distribution 必须是 'normal' 或 't'，得到: '{distribution}'")
+            # 标准化 dist_type
+            if dist_type == 'normal':
+                dist_type = 'norm'
             
-            # 将 'normal' 转换为内部使用的 'norm'
-            internal_dist = 'norm' if distribution == 'normal' else 't'
+            if input_mode == 'data':
+                data = var_def.get('data')
+                if not data:
+                    raise ValueError(f"变量 {name} 使用 data 模式但未提供 data 字段")
+                self.add_variable(name, data=np.array(data), dist_type=dist_type,
+                                min_value=min_value, max_value=max_value)
             
-            # 获取可选的限值
-            min_limit = var_config.get('min_limit', None)
-            max_limit = var_config.get('max_limit', None)
-            
-            if var_type == 'data':
-                # Data 类型变量
-                if 'values' not in var_config:
-                    raise ValueError(f"变量 '{var_name}' type为'data'时必须提供 'values' 字段")
+            elif input_mode == 'params':
+                mean = var_def.get('mean')
+                std = var_def.get('std')
+                df = var_def.get('df')
                 
-                # 检测错误：data类型不应该有mean/std/df
-                if any(k in var_config for k in ['mean', 'std', 'df']):
-                    raise ValueError(f"变量 '{var_name}' type为'data'时不应该提供 'mean', 'std' 或 'df' 字段")
+                if mean is None or std is None:
+                    raise ValueError(f"变量 {name} 使用 params 模式但未提供 mean 或 std")
                 
-                values = var_config['values']
-                if not isinstance(values, list) or len(values) == 0:
-                    raise ValueError(f"变量 '{var_name}' 的 'values' 必须是非空数组")
-                
-                self.add_variable(
-                    name=var_name,
-                    data=values,
-                    dist_type=internal_dist,
-                    min_value=min_limit,
-                    max_value=max_limit
-                )
-                
-            elif var_type == 'params':
-                # Params 类型变量
-                if 'mean' not in var_config or 'std' not in var_config:
-                    raise ValueError(f"变量 '{var_name}' type为'params'时必须提供 'mean' 和 'std' 字段")
-                
-                # 检测错误：params类型不应该有values
-                if 'values' in var_config:
-                    raise ValueError(f"变量 '{var_name}' type为'params'时不应该提供 'values' 字段")
-                
-                mean = var_config['mean']
-                std = var_config['std']
-                df = None
-                
-                if distribution == 't':
-                    if 'df' not in var_config:
-                        raise ValueError(f"变量 '{var_name}' distribution为't'时必须提供 'df' (自由度) 字段")
-                    df = var_config['df']
-                
-                self.add_variable(
-                    name=var_name,
-                    mean=mean,
-                    std=std,
-                    dist_type=internal_dist,
-                    df=df,
-                    min_value=min_limit,
-                    max_value=max_limit
-                )
+                self.add_variable(name, mean=mean, std=std, dist_type=dist_type, df=df,
+                                min_value=min_value, max_value=max_value)
             else:
-                raise ValueError(f"变量 '{var_name}' 的 type 必须是 'data' 或 'params'，得到: '{var_type}'")
+                raise ValueError(f"变量 {name} 的 input_mode 必须是 'data' 或 'params'")
     
     def run_simulation(self, formula: Callable, result_name: str = 'Result', 
-                      n_samples: int = 1000000, formula_str: str = '', cdf_fit_degree: int = 5):
+                      n_samples: int = 1000000, formula_str: str = None,
+                      cdf_fit_degree: int = 5):
         """
         运行Monte Carlo模拟
-        
-        Parameters:
-        -----------
-        cdf_fit_degree : int
-            CDF多项式拟合的次数，默认为5
         """
-        # 对所有变量进行抽样
-        for var in self.variables.values():
-            var.monte_carlo_sample(n_samples)
+        if len(self.variables) == 0:
+            raise ValueError("请先添加变量")
         
-        # 构建变量字典
-        var_dict = {name: var.samples for name, var in self.variables.items()}
-        
-        # 计算结果
-        self.result = formula(var_dict)
         self.result_name = result_name
         self.formula_str = formula_str
         self.cdf_fit_degree = cdf_fit_degree
         
-        # 执行敏感性分析
-        self._perform_sensitivity_analysis(var_dict)
+        # 对所有变量进行Monte Carlo抽样
+        var_samples = {}
+        for name, var in self.variables.items():
+            var.monte_carlo_sample(n_samples)
+            var_samples[name] = var.samples
         
-        # 执行CDF拟合
+        # 保存变量样本
+        self.var_samples = var_samples
+        
+        # 计算结果
+        self.result = formula(var_samples)
+        self.result_samples = self.result
+        
+        # 敏感性分析
+        self._perform_sensitivity_analysis(var_samples)
+        
+        # CDF拟合 (Forward: Result → CDF)
         self._fit_cdf_polynomial()
+        
+        # CDF拟合 (Inverse: CDF → Result) 【新增】
+        self._fit_cdf_inverse_polynomial()
         
         # 清空图表缓存
         self.chart_cache = {}
     
-    def analyze_result(self, confidence_levels: List[float] = [0.95, 0.99]):
+    def get_variable_info(self):
         """
-        分析结果分布,返回统计信息字典
+        获取所有变量信息
+        """
+        info = {}
+        for name, var in self.variables.items():
+            info[name] = {
+                'input_mode': var.input_mode,
+                'dist_type': var.dist_type,
+                'dist_params': var.dist_params,
+                'has_samples': var.samples is not None,
+                'min_value': var.min_value,
+                'max_value': var.max_value
+            }
+        return info
+    
+    def _perform_sensitivity_analysis(self, var_samples: Dict[str, np.ndarray]):
+        """
+        执行敏感性分析（内部方法）
+        使用 Spearman 秩相关系数来衡量变量对结果的影响
         """
         if self.result is None:
             raise ValueError("请先运行模拟")
         
-        self.confidence_levels = confidence_levels
+        sensitivities = {}
+        
+        for var_name, var_data in var_samples.items():
+            # 计算 Spearman 秩相关系数
+            corr, p_value = stats.spearmanr(var_data, self.result)
+            sensitivities[var_name] = {
+                'correlation': float(corr),
+                'abs_correlation': float(abs(corr)),
+                'p_value': float(p_value)
+            }
+        
+        # 按绝对值排序
+        self.sensitivity_results = dict(
+            sorted(sensitivities.items(), 
+                   key=lambda x: x[1]['abs_correlation'], 
+                   reverse=True)
+        )
+    
+    def _fit_cdf_polynomial(self, n_points: int = 500):
+        """
+        对CDF曲线进行多项式拟合（Forward: Result → CDF）
+        
+        Parameters:
+        -----------
+        n_points : int
+            拟合使用的等分点数量，默认500
+        """
+        if self.result is None:
+            raise ValueError("请先运行模拟")
+        
+        # 排序结果
+        sorted_result = np.sort(self.result)
+        n_total = len(sorted_result)
+        
+        # 生成等分点的索引
+        indices = np.linspace(0, n_total - 1, n_points, dtype=int)
+        x_points = sorted_result[indices]
+        
+        # 对应的CDF值
+        cdf_values = (indices + 1) / n_total
+        
+        # 多项式拟合: CDF = f(result)
+        coefficients = np.polyfit(x_points, cdf_values, self.cdf_fit_degree)
+        
+        # 计算拟合优度
+        fitted_cdf = np.polyval(coefficients, x_points)
+        
+        # R² score
+        ss_res = np.sum((cdf_values - fitted_cdf) ** 2)
+        ss_tot = np.sum((cdf_values - np.mean(cdf_values)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        # RMSE
+        rmse = np.sqrt(np.mean((cdf_values - fitted_cdf) ** 2))
+        
+        # 保存结果
+        self.cdf_fit_result = {
+            'degree': self.cdf_fit_degree,
+            'n_points': n_points,
+            'coefficients': coefficients.tolist(),
+            'r_squared': float(r_squared),
+            'rmse': float(rmse),
+            'x_points': x_points.tolist(),
+            'cdf_values': cdf_values.tolist()
+        }
+    
+    def _fit_cdf_inverse_polynomial(self, n_points: int = 500):
+        """
+        对CDF曲线进行反向多项式拟合（Inverse: CDF → Result）
+        用于根据累积概率反算结果值（分位数函数）
+        
+        Parameters:
+        -----------
+        n_points : int
+            拟合使用的等分点数量，默认500
+        """
+        if self.result is None:
+            raise ValueError("请先运行模拟")
+        
+        # 排序结果
+        sorted_result = np.sort(self.result)
+        n_total = len(sorted_result)
+        
+        # 生成等分点的索引
+        indices = np.linspace(0, n_total - 1, n_points, dtype=int)
+        x_points = sorted_result[indices]
+        
+        # 对应的CDF值
+        cdf_values = (indices + 1) / n_total
+        
+        # 反向多项式拟合: result = f(CDF)
+        coefficients = np.polyfit(cdf_values, x_points, self.cdf_fit_degree)
+        
+        # 计算拟合优度
+        fitted_result = np.polyval(coefficients, cdf_values)
+        
+        # R² score
+        ss_res = np.sum((x_points - fitted_result) ** 2)
+        ss_tot = np.sum((x_points - np.mean(x_points)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        # RMSE
+        rmse = np.sqrt(np.mean((x_points - fitted_result) ** 2))
+        
+        # 保存结果
+        self.cdf_inverse_fit_result = {
+            'degree': self.cdf_fit_degree,
+            'n_points': n_points,
+            'coefficients': coefficients.tolist(),
+            'r_squared': float(r_squared),
+            'rmse': float(rmse),
+            'cdf_values': cdf_values.tolist(),
+            'x_points': x_points.tolist()
+        }
+    
+    def analyze_result(self, confidence_levels: List[float] = [0.95, 0.99]):
+        """
+        分析结果统计数据
+        """
+        if self.result is None:
+            raise ValueError("请先运行模拟")
         
         analysis = {
             'mean': float(np.mean(self.result)),
+            'std': float(np.std(self.result, ddof=1)),
             'median': float(np.median(self.result)),
-            'std': float(np.std(self.result)),
             'min': float(np.min(self.result)),
             'max': float(np.max(self.result)),
-            'skew': float(stats.skew(self.result)),
-            'kurtosis': float(stats.kurtosis(self.result)),
-            'confidence_intervals': {},
-            'quantiles': {}
+            'percentiles': {}
         }
         
-        for cl in confidence_levels:
-            alpha = 1 - cl
-            lower = float(np.percentile(self.result, alpha / 2 * 100))
-            upper = float(np.percentile(self.result, (1 - alpha / 2) * 100))
-            analysis['confidence_intervals'][f'{int(cl*100)}%'] = [lower, upper]
+        # 常用百分位数
+        common_percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        for p in common_percentiles:
+            analysis['percentiles'][f'p{p}'] = float(np.percentile(self.result, p))
         
-        for q in [0.05, 0.25, 0.50, 0.75, 0.95]:
-            analysis['quantiles'][f'{int(q*100)}%'] = float(np.percentile(self.result, q*100))
+        # 置信区间
+        analysis['confidence_intervals'] = {}
+        for cl in confidence_levels:
+            lower = (1 - cl) / 2
+            upper = 1 - lower
+            analysis['confidence_intervals'][f'{int(cl*100)}%'] = {
+                'lower': float(np.percentile(self.result, lower * 100)),
+                'upper': float(np.percentile(self.result, upper * 100))
+            }
+        
+        # 敏感性分析
+        if self.sensitivity_results:
+            analysis['sensitivity'] = self.sensitivity_results
+        
+        # CDF拟合信息
+        if self.cdf_fit_result:
+            analysis['cdf_forward_fit'] = {
+                'degree': self.cdf_fit_result['degree'],
+                'r_squared': self.cdf_fit_result['r_squared'],
+                'rmse': self.cdf_fit_result['rmse']
+            }
+        
+        # 反向CDF拟合信息
+        if self.cdf_inverse_fit_result:
+            analysis['cdf_inverse_fit'] = {
+                'degree': self.cdf_inverse_fit_result['degree'],
+                'r_squared': self.cdf_inverse_fit_result['r_squared'],
+                'rmse': self.cdf_inverse_fit_result['rmse']
+            }
         
         return analysis
     
@@ -595,185 +725,173 @@ class MonteCarloSimulator:
         
         return img_base64
     
-    def get_variable_info(self):
-        """
-        获取所有变量信息
-        """
-        info = {}
-        for name, var in self.variables.items():
-            info[name] = {
-                'input_mode': var.input_mode,
-                'dist_type': var.dist_type,
-                'dist_params': var.dist_params,
-                'has_samples': var.samples is not None,
-                'min_value': var.min_value,
-                'max_value': var.max_value
-            }
-        return info
-    
-    def _perform_sensitivity_analysis(self, var_samples: Dict[str, np.ndarray]):
-        """
-        执行敏感性分析（内部方法）
-        使用 Spearman 秩相关系数来衡量变量对结果的影响
-        """
-        if self.result is None:
-            raise ValueError("请先运行模拟")
-        
-        sensitivities = {}
-        
-        for var_name, var_data in var_samples.items():
-            # 计算 Spearman 秩相关系数
-            corr, p_value = stats.spearmanr(var_data, self.result)
-            sensitivities[var_name] = {
-                'correlation': float(corr),
-                'abs_correlation': float(abs(corr)),
-                'p_value': float(p_value)
-            }
-        
-        # 按绝对值排序
-        self.sensitivity_results = dict(
-            sorted(sensitivities.items(), 
-                   key=lambda x: x[1]['abs_correlation'], 
-                   reverse=True)
-        )
-    
-    def _fit_cdf_polynomial(self, n_points: int = 500):
-        """
-        对CDF曲线进行多项式拟合（内部方法）
-        
-        Parameters:
-        -----------
-        n_points : int
-            拟合使用的等分点数量，默认500
-        """
-        if self.result is None:
-            raise ValueError("请先运行模拟")
-        
-        # 排序结果
-        sorted_result = np.sort(self.result)
-        n_total = len(sorted_result)
-        
-        # 生成500个等分点的索引
-        indices = np.linspace(0, n_total - 1, n_points, dtype=int)
-        x_points = sorted_result[indices]
-        
-        # 对应的CDF值
-        cdf_values = (indices + 1) / n_total
-        
-        # 多项式拟合
-        coefficients = np.polyfit(x_points, cdf_values, self.cdf_fit_degree)
-        
-        # 计算拟合优度
-        fitted_cdf = np.polyval(coefficients, x_points)
-        
-        # R² score
-        ss_res = np.sum((cdf_values - fitted_cdf) ** 2)
-        ss_tot = np.sum((cdf_values - np.mean(cdf_values)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot)
-        
-        # RMSE
-        rmse = np.sqrt(np.mean((cdf_values - fitted_cdf) ** 2))
-        
-        # 保存结果
-        self.cdf_fit_result = {
-            'degree': self.cdf_fit_degree,
-            'n_points': n_points,
-            'coefficients': coefficients.tolist(),
-            'r_squared': float(r_squared),
-            'rmse': float(rmse)
-        }
-    
     def generate_report(self, confidence_levels: List[float] = [0.95, 0.99]):
         """
         生成文本格式的分析报告
-        
-        Parameters:
-        -----------
-        confidence_levels : List[float]
-            置信水平列表
-        
-        Returns:
-        --------
-        str : 格式化的文本报告
         """
         if self.result is None:
             raise ValueError("请先运行模拟")
         
-        # 分析结果
-        analysis = self.analyze_result(confidence_levels)
-        
-        # 构建报告
         report_lines = []
         report_lines.append("=" * 70)
-        report_lines.append(f"Monte Carlo Simulation Report - {self.result_name}")
+        report_lines.append("         MONTE CARLO SIMULATION REPORT")
         report_lines.append("=" * 70)
         report_lines.append("")
+        report_lines.append(f"Simulation Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(f"Result Name: {self.result_name}")
+        report_lines.append(f"Number of Samples: {len(self.result):,}")
+        report_lines.append("")
         
-        # 基本统计信息
-        report_lines.append("=== Basic Statistics ===")
-        report_lines.append(f"Mean:             {analysis['mean']:.6f}")
-        report_lines.append(f"Median:           {analysis['median']:.6f}")
-        report_lines.append(f"Std Deviation:    {analysis['std']:.6f}")
-        report_lines.append(f"Minimum:          {analysis['min']:.6f}")
-        report_lines.append(f"Maximum:          {analysis['max']:.6f}")
-        report_lines.append(f"Skewness:         {analysis['skew']:.6f}")
-        report_lines.append(f"Kurtosis:         {analysis['kurtosis']:.6f}")
+        # 统计摘要
+        report_lines.append("=== Statistical Summary ===")
+        report_lines.append(f"Mean:              {np.mean(self.result):.6f}")
+        report_lines.append(f"Std Deviation:     {np.std(self.result, ddof=1):.6f}")
+        report_lines.append(f"Median (P50):      {np.median(self.result):.6f}")
+        report_lines.append(f"Minimum:           {np.min(self.result):.6f}")
+        report_lines.append(f"Maximum:           {np.max(self.result):.6f}")
+        report_lines.append("")
+        
+        # 百分位数
+        report_lines.append("=== Percentiles ===")
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        for p in percentiles:
+            val = np.percentile(self.result, p)
+            report_lines.append(f"P{p:2d}:  {val:.6f}")
         report_lines.append("")
         
         # 置信区间
         report_lines.append("=== Confidence Intervals ===")
-        for level, (lower, upper) in analysis['confidence_intervals'].items():
-            report_lines.append(f"{level:>4}: [{lower:.6f}, {upper:.6f}]")
+        for cl in confidence_levels:
+            lower = (1 - cl) / 2
+            upper = 1 - lower
+            lower_val = np.percentile(self.result, lower * 100)
+            upper_val = np.percentile(self.result, upper * 100)
+            report_lines.append(f"{int(cl*100)}% CI: [{lower_val:.6f}, {upper_val:.6f}]")
         report_lines.append("")
         
-        # 分位数
-        report_lines.append("=== Quantiles ===")
-        for q, value in analysis['quantiles'].items():
-            report_lines.append(f"{q:>4}: {value:.6f}")
-        report_lines.append("")
-        
-        # CDF多项式拟合结果
+        # CDF Forward Fit
         if self.cdf_fit_result:
-            report_lines.append("=== CDF Polynomial Fit Analysis ===")
+            report_lines.append("=== CDF Forward Fit (Result → CDF) ===")
             report_lines.append(f"Degree: {self.cdf_fit_result['degree']}")
             report_lines.append(f"Number of fitting points: {self.cdf_fit_result['n_points']}")
+            report_lines.append(f"R² Score: {self.cdf_fit_result['r_squared']:.8f}")
+            report_lines.append(f"RMSE: {self.cdf_fit_result['rmse']:.8f}")
             report_lines.append("")
             
             report_lines.append("Polynomial Coefficients (highest to lowest degree):")
             coeffs = self.cdf_fit_result['coefficients']
             for i, coeff in enumerate(coeffs):
                 power = self.cdf_fit_result['degree'] - i
-                report_lines.append(f"  x^{power}: {coeff:.6e}")
+                report_lines.append(f"  a{power}: {coeff:.15e}")
             report_lines.append("")
             
-            report_lines.append("Goodness of Fit:")
-            report_lines.append(f"  R² Score: {self.cdf_fit_result['r_squared']:.6f}")
-            report_lines.append(f"  RMSE: {self.cdf_fit_result['rmse']:.6f}")
-            report_lines.append("")
-            
-            # 构建拟合函数字符串
+            # 构建函数字符串
             func_parts = []
             for i, coeff in enumerate(coeffs):
                 power = self.cdf_fit_result['degree'] - i
                 if power == 0:
-                    func_parts.append(f"{coeff:.2e}")
+                    func_parts.append(f"{coeff:.6e}")
                 elif power == 1:
-                    func_parts.append(f"{coeff:.2e}*x")
+                    func_parts.append(f"{coeff:.6e}*x")
                 else:
-                    func_parts.append(f"{coeff:.2e}*x^{power}")
+                    func_parts.append(f"{coeff:.6e}*x^{power}")
             
             func_str = " + ".join(func_parts).replace("+ -", "- ")
-            report_lines.append("Fitted CDF Function:")
+            report_lines.append("Fitted Function:")
             report_lines.append(f"  CDF(x) = {func_str}")
+            report_lines.append("")
+        
+        # CDF Inverse Fit
+        if self.cdf_inverse_fit_result:
+            report_lines.append("=== CDF Inverse Fit (CDF → Result) ===")
+            report_lines.append(f"Degree: {self.cdf_inverse_fit_result['degree']}")
+            report_lines.append(f"Number of fitting points: {self.cdf_inverse_fit_result['n_points']}")
+            report_lines.append(f"R² Score: {self.cdf_inverse_fit_result['r_squared']:.8f}")
+            report_lines.append(f"RMSE: {self.cdf_inverse_fit_result['rmse']:.8f}")
+            report_lines.append("")
+            
+            report_lines.append("Polynomial Coefficients (highest to lowest degree):")
+            coeffs = self.cdf_inverse_fit_result['coefficients']
+            for i, coeff in enumerate(coeffs):
+                power = self.cdf_inverse_fit_result['degree'] - i
+                report_lines.append(f"  b{power}: {coeff:.15e}")
+            report_lines.append("")
+            
+            # 构建函数字符串
+            func_parts = []
+            for i, coeff in enumerate(coeffs):
+                power = self.cdf_inverse_fit_result['degree'] - i
+                if power == 0:
+                    func_parts.append(f"{coeff:.6e}")
+                elif power == 1:
+                    func_parts.append(f"{coeff:.6e}*p")
+                else:
+                    func_parts.append(f"{coeff:.6e}*p^{power}")
+            
+            func_str = " + ".join(func_parts).replace("+ -", "- ")
+            report_lines.append("Fitted Quantile Function:")
+            report_lines.append(f"  x(p) = {func_str}")
             report_lines.append("")
         
         # 敏感性分析
         if self.sensitivity_results:
             report_lines.append("=== Sensitivity Analysis ===")
-            report_lines.append("Variables ranked by impact (Spearman correlation):")
-            for var_name, sens_data in self.sensitivity_results.items():
+            report_lines.append(f"{'Rank':<6} {'Variable':<20} {'Correlation':<14} {'P-Value':<14} {'Significance'}")
+            report_lines.append("-" * 70)
+            
+            for rank, (var_name, sens_data) in enumerate(self.sensitivity_results.items(), 1):
                 corr = sens_data['correlation']
-                report_lines.append(f"  {var_name:20s}: {corr:+.6f} (p-value: {sens_data['p_value']:.4e})")
+                p_val = sens_data['p_value']
+                
+                # 添加显著性标记
+                if p_val < 0.001:
+                    significance = "***"
+                elif p_val < 0.01:
+                    significance = "**"
+                elif p_val < 0.05:
+                    significance = "*"
+                else:
+                    significance = ""
+                
+                report_lines.append(f"{rank:<6} {var_name:<20} {corr:>+.6f}{'':<6} {p_val:.4e}{'':<6} {significance}")
+            
+            report_lines.append("Significance levels: *** p<0.001, ** p<0.01, * p<0.05")
+            report_lines.append("")
+            
+            # Pareto 分析
+            report_lines.append("=== Pareto Analysis (Contribution & Cumulative) ===")
+            var_names = list(self.sensitivity_results.keys())
+            abs_corrs = [self.sensitivity_results[name]['abs_correlation'] for name in var_names]
+            total = sum(abs_corrs)
+            
+            if total > 0:
+                contributions = [(corr / total * 100) for corr in abs_corrs]
+                cumulative = 0
+                key_var_count = 0
+                threshold_reached = False
+                
+                report_lines.append(f"{'Rank':<6} {'Variable':<20} {'Contribution':<14} {'Cumulative':<14} {'Status'}")
+                report_lines.append("-" * 70)
+                
+                for rank, (var_name, contrib) in enumerate(zip(var_names, contributions), 1):
+                    cumulative += contrib
+                    # 标记所有对达到80%有贡献的变量
+                    if cumulative >= 80 and not threshold_reached:
+                        threshold_reached = True
+                        key_var_count = rank
+                        status = "*** KEY ***"
+                    elif not threshold_reached:
+                        # 80%之前的所有变量都是关键的
+                        status = "*** KEY ***"
+                    else:
+                        status = ""
+                    
+                    report_lines.append(f"{rank:<6} {var_name:<20} {contrib:>6.2f}%{'':<7} {cumulative:>6.2f}%{'':<7} {status}")
+                
+                if key_var_count > 0:
+                    report_lines.append(f"Key Variables (80% rule): Top {key_var_count} variable(s) contribute ≥80% of impact")
+                else:
+                    report_lines.append(f"Note: All {len(var_names)} variables combined contribute < 80% (possible edge case)")
             report_lines.append("")
         
         # 变量信息
@@ -801,6 +919,284 @@ class MonteCarloSimulator:
         report_lines.append("=" * 70)
         
         return "\n".join(report_lines)
+    
+    def export_to_csv(self):
+        """
+        导出数据为CSV格式（包含metadata和采样数据）
+        """
+        if self.result is None:
+            raise ValueError("请先运行模拟")
+        
+        lines = []
+        
+        # Metadata部分 - 更清晰的标题
+        lines.append("# MONTE CARLO SIMULATION RESULTS")
+        lines.append(f"# Simulation_Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"# Formula: {self.formula_str if self.formula_str else 'N/A'}")
+        lines.append(f"# Result_Name: {self.result_name}")
+        lines.append(f"# Number_of_Samples: {len(self.result)}")
+        lines.append("#")
+        
+        # 变量配置 - 表格化格式
+        lines.append("# === VARIABLE CONFIGURATIONS ===")
+        lines.append("# Name, Input_Mode, Distribution, Parameters, Limits")
+        for var_name, var in self.variables.items():
+            # 分布参数
+            if var.dist_type == 'norm':
+                params = f"mean={var.dist_params[0]:.6f}, std={var.dist_params[1]:.6f}"
+            elif var.dist_type == 't':
+                params = f"df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}"
+            else:
+                params = "N/A"
+            
+            # 限制条件
+            limits = ""
+            if var.min_value is not None or var.max_value is not None:
+                min_str = f"{var.min_value:.6f}" if var.min_value is not None else "-inf"
+                max_str = f"{var.max_value:.6f}" if var.max_value is not None else "+inf"
+                limits = f"[{min_str}, {max_str}]"
+            else:
+                limits = "[-inf, +inf]"
+            
+            lines.append(f"# {var_name}, {var.input_mode}, {var.dist_type}, {params}, {limits}")
+        lines.append("#")
+        
+        # 统计摘要 - 表格格式
+        lines.append("# === STATISTICAL SUMMARY ===")
+        lines.append("# Statistic, Value")
+        lines.append(f"# Mean, {np.mean(self.result):.8f}")
+        lines.append(f"# Std, {np.std(self.result, ddof=1):.8f}")
+        lines.append(f"# Median, {np.median(self.result):.8f}")
+        lines.append(f"# Min, {np.min(self.result):.8f}")
+        lines.append(f"# Max, {np.max(self.result):.8f}")
+        
+        # 分位数 - 统一格式
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        for p in percentiles:
+            val = np.percentile(self.result, p)
+            lines.append(f"# P{p:02d}, {val:.8f}")
+        lines.append("#")
+        
+        # CDF Forward Fit
+        if self.cdf_fit_result:
+            lines.append("# === CDF FORWARD FIT (Result → CDF) ===")
+            lines.append("# Parameter, Value")
+            lines.append(f"# Degree, {self.cdf_fit_result['degree']}")
+            lines.append(f"# R_squared, {self.cdf_fit_result['r_squared']:.10f}")
+            lines.append(f"# RMSE, {self.cdf_fit_result['rmse']:.10f}")
+            lines.append("# Coefficients:")
+            for i, coeff in enumerate(self.cdf_fit_result['coefficients']):
+                lines.append(f"#   coeff_{i}, {coeff:.15e}")
+            lines.append("#")
+        
+        # CDF Inverse Fit
+        if self.cdf_inverse_fit_result:
+            lines.append("# === CDF INVERSE FIT (CDF → Result) ===")
+            lines.append("# Parameter, Value")
+            lines.append(f"# Degree, {self.cdf_inverse_fit_result['degree']}")
+            lines.append(f"# R_squared, {self.cdf_inverse_fit_result['r_squared']:.10f}")
+            lines.append(f"# RMSE, {self.cdf_inverse_fit_result['rmse']:.10f}")
+            lines.append("# Coefficients:")
+            for i, coeff in enumerate(self.cdf_inverse_fit_result['coefficients']):
+                lines.append(f"#   coeff_{i}, {coeff:.15e}")
+            lines.append("#")
+        
+        # 敏感性分析 - 表格格式
+        if self.sensitivity_results:
+            lines.append("# === SENSITIVITY ANALYSIS ===")
+            lines.append("# Rank, Variable, Correlation, P_Value, Significance")
+            
+            for rank, (var_name, data) in enumerate(self.sensitivity_results.items(), 1):
+                # 添加显著性标记
+                p_val = data['p_value']
+                if p_val < 0.001:
+                    significance = "***"
+                elif p_val < 0.01:
+                    significance = "**"
+                elif p_val < 0.05:
+                    significance = "*"
+                else:
+                    significance = ""
+                
+                lines.append(f"# {rank}, {var_name}, {data['correlation']:+.6f}, {p_val:.4e}, {significance}")
+            
+            lines.append("# Significance: *** p<0.001, ** p<0.01, * p<0.05")
+            lines.append("#")
+
+            # ** Pareto 分析部分 **
+            lines.append("# === PARETO ANALYSIS ===")
+            lines.append("# Rank, Variable, Contribution_%, Cumulative_%, Status")
+            
+            var_names = list(self.sensitivity_results.keys())
+            abs_corrs = [self.sensitivity_results[name]['abs_correlation'] for name in var_names]
+            total = sum(abs_corrs)
+            
+            if total > 0:
+                contributions = [(corr / total * 100) for corr in abs_corrs]
+                cumulative = 0
+                threshold_reached = False
+                
+                for rank, (var_name, contrib) in enumerate(zip(var_names, contributions), 1):
+                    cumulative += contrib
+                    if cumulative >= 80 and not threshold_reached:
+                        threshold_reached = True
+                        status = "KEY"
+                    elif not threshold_reached:
+                        status = "KEY"
+                    else:
+                        status = ""
+                    
+                    lines.append(f"# {rank}, {var_name}, {contrib:.2f}, {cumulative:.2f}, {status}")
+            
+            lines.append("#")
+        
+        # 原始数据部分
+        lines.append("# === RAW SAMPLE DATA ===")
+        
+        # 数据头
+        header = [f"{self.result_name}"] + list(self.variables.keys())
+        lines.append(','.join(header))
+        
+        # 数据行 - 可选：限制输出行数以避免文件过大
+        max_samples_to_export = min(10000, len(self.result))  # 最多导出10000行
+        if len(self.result) > max_samples_to_export:
+            lines.append(f"# Note: Showing first {max_samples_to_export} samples out of {len(self.result)} total")
+            indices = range(max_samples_to_export)
+        else:
+            indices = range(len(self.result))
+        
+        for i in indices:
+            row = [f"{self.result[i]:.15e}"]
+            for var_name in self.variables.keys():
+                row.append(f"{self.var_samples[var_name][i]:.15e}")
+            lines.append(','.join(row))
+        
+        # 如果截断了数据，添加说明
+        if len(self.result) > max_samples_to_export:
+            lines.append(f"# ... {len(self.result) - max_samples_to_export} more samples not shown")
+        
+        return '\n'.join(lines)
+    
+    def export_to_json(self, include_samples=True):
+        """
+        导出数据为JSON格式
+        """
+        if self.result is None:
+            raise ValueError("请先运行模拟")
+        
+        data = {
+            'metadata': {
+                'simulation_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'formula': self.formula_str if self.formula_str else None,
+                'result_name': self.result_name,
+                'n_samples': len(self.result)
+            },
+            'variables': {},
+            f'{self.result_name}_statistics': {
+                'mean': float(np.mean(self.result)),
+                'std': float(np.std(self.result, ddof=1)),
+                'median': float(np.median(self.result)),
+                'min': float(np.min(self.result)),
+                'max': float(np.max(self.result)),
+                'percentiles': {}
+            },
+            'cdf_fit': {},
+            'sensitivity': {}
+        }
+        
+        # 百分位数
+        percentiles = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+        for p in percentiles:
+            data[f'{self.result_name}_statistics']['percentiles'][f'p{p}'] = float(np.percentile(self.result, p))
+        
+        # 变量信息
+        for var_name, var in self.variables.items():
+            data['variables'][var_name] = {
+                'input_mode': var.input_mode,
+                'dist_type': var.dist_type,
+                'dist_params': list(var.dist_params) if var.dist_params else None,
+                'limits': {
+                    'min': var.min_value,
+                    'max': var.max_value
+                }
+            }
+        
+        # CDF拟合
+        if self.cdf_fit_result:
+            data['cdf_fit']['forward'] = {
+                'type': 'polynomial',
+                'degree': self.cdf_fit_result['degree'],
+                'coefficients': self.cdf_fit_result['coefficients'],
+                'r_squared': self.cdf_fit_result['r_squared'],
+                'rmse': self.cdf_fit_result['rmse']
+            }
+        
+        if self.cdf_inverse_fit_result:
+            data['cdf_fit']['inverse'] = {
+                'type': 'polynomial',
+                'degree': self.cdf_inverse_fit_result['degree'],
+                'coefficients': self.cdf_inverse_fit_result['coefficients'],
+                'r_squared': self.cdf_inverse_fit_result['r_squared'],
+                'rmse': self.cdf_inverse_fit_result['rmse']
+            }
+        
+        # 敏感性分析
+        if self.sensitivity_results:
+            for rank, (var_name, sens_data) in enumerate(self.sensitivity_results.items(), 1):
+                data['sensitivity'][var_name] = {
+                    'rank': rank,
+                    'correlation': sens_data['correlation'],
+                    'abs_correlation': sens_data['abs_correlation'],
+                    'p_value': sens_data['p_value']
+                }
+            # ** Pareto **
+            var_names = list(self.sensitivity_results.keys())
+            abs_corrs = [self.sensitivity_results[name]['abs_correlation'] for name in var_names]
+            total = sum(abs_corrs)
+            
+            data['pareto_analysis'] = {}
+            
+            if total > 0:
+                contributions = [(corr / total * 100) for corr in abs_corrs]
+                cumulative = 0
+                threshold_reached = False
+                key_variables = []
+                
+                for rank, (var_name, contrib) in enumerate(zip(var_names, contributions), 1):
+                    cumulative += contrib
+                    is_key = False
+                    
+                    if cumulative >= 80 and not threshold_reached:
+                        threshold_reached = True
+                        is_key = True
+                    elif not threshold_reached:
+                        is_key = True
+                    
+                    if is_key:
+                        key_variables.append(var_name)
+                    
+                    data['pareto_analysis'][var_name] = {
+                        'rank': rank,
+                        'contribution_percent': round(contrib, 2),
+                        'cumulative_percent': round(cumulative, 2),
+                        'is_key_variable': is_key
+                    }
+                
+                data['pareto_analysis']['summary'] = {
+                    'key_variable_count': len(key_variables),
+                    'key_variables': key_variables,
+                    'threshold': 80.0
+                }
+        
+        # 采样数据（可选）
+        if include_samples:
+            data['samples'] = {
+                f'{self.result_name}': self.result.tolist()
+            }
+            for var_name in self.variables.keys():
+                data['samples'][var_name] = self.var_samples[var_name].tolist()
+        
+        return json.dumps(data, indent=2, ensure_ascii=False)
     
     def plot_pareto_chart(self, figsize=(12, 6), threshold=0.8):
         """
@@ -837,7 +1233,7 @@ class MonteCarloSimulator:
         ax1.set_xlabel('Variable Name', fontsize=13, fontweight='bold')
         ax1.set_ylabel('Contribution (%)', fontsize=13, fontweight='bold', color='steelblue')
         ax1.set_xticks(x_pos)
-        ax1.set_xticklabels(var_names, rotation=45, ha='right')
+        ax1.set_xticklabels(var_names, rotation=15, ha='right')
         ax1.tick_params(axis='y', labelcolor='steelblue')
         ax1.set_ylim(0, max(contributions) * 1.15 if contributions else 1)
         
@@ -854,18 +1250,6 @@ class MonteCarloSimulator:
         ax2.set_ylabel('Cumulative Contribution (%)', fontsize=13, fontweight='bold', color='red')
         ax2.tick_params(axis='y', labelcolor='red')
         ax2.set_ylim(0, 105)
-        
-        # 阈值线
-        if threshold:
-            ax2.axhline(y=threshold*100, color='green', linestyle='--', 
-                       linewidth=2, alpha=0.7, label=f'{int(threshold*100)}% Threshold')
-            
-            n_vars_for_threshold = np.argmax(cumulative >= threshold*100) + 1
-            ax2.text(len(var_names)-0.5, threshold*100 + 2, 
-                    f'Top {n_vars_for_threshold} vars ≥{int(threshold*100)}%',
-                    fontsize=11, color='green', fontweight='bold',
-                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow', 
-                             alpha=0.8, edgecolor='green'))
         
         plt.title(f'{self.result_name} - Sensitivity Analysis Pareto Chart', 
                  fontsize=15, fontweight='bold', pad=20)
@@ -887,7 +1271,7 @@ class MonteCarloSimulator:
         
         return img_base64
     
-    def plot_tornado_chart(self, figsize=(10, 8)):
+    def plot_tornado_chart(self, figsize=(12, 6)):
         """
         绘制龙卷风图（Tornado Chart），显示各变量对结果的影响方向
         """
@@ -941,4 +1325,3 @@ class MonteCarloSimulator:
         plt.close(fig)
         
         return img_base64
-
