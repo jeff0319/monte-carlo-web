@@ -1057,14 +1057,15 @@ class MonteCarloSimulator:
         header = [f"{self.result_name}"] + list(self.variables.keys())
         lines.append(','.join(header))
         
-        # 数据行 - 可选：限制输出行数以避免文件过大
-        max_samples_to_export = min(10000, len(self.result))  # 最多导出10000行
-        if len(self.result) > max_samples_to_export:
-            lines.append(f"# Note: Showing first {max_samples_to_export} samples out of {len(self.result)} total")
-            indices = range(max_samples_to_export)
-        else:
-            indices = range(len(self.result))
+        # # 数据行 - 可选：限制输出行数以避免文件过大
+        # max_samples_to_export = min(10000, len(self.result))  # 最多导出10000行
+        # if len(self.result) > max_samples_to_export:
+        #     lines.append(f"# Note: Showing first {max_samples_to_export} samples out of {len(self.result)} total")
+        #     indices = range(max_samples_to_export)
+        # else:
+        #     indices = range(len(self.result))
         
+        indices = range(len(self.result))
         for i in indices:
             row = [f"{self.result[i]:.15e}"]
             for var_name in self.variables.keys():
