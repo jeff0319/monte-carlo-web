@@ -331,60 +331,6 @@ def reset():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-# ==================== 新增：下载 ZIP 功能 ====================
-
-def format_cdf_fit_details(fit_result, fit_type):
-    """格式化 CDF 拟合详情"""
-    lines = []
-    lines.append("="*70)
-    lines.append(f"  CDF {'Forward' if fit_type == 'forward' else 'Inverse'} Fit Details")
-    lines.append("="*70)
-    lines.append("")
-    lines.append(f"Fit Type: {'Result → CDF' if fit_type == 'forward' else 'CDF → Result'}")
-    lines.append(f"Degree: {fit_result['degree']}")
-    lines.append(f"R² Score: {fit_result['r_squared']:.8f}")
-    lines.append(f"RMSE: {fit_result['rmse']:.8f}")
-    lines.append("")
-    lines.append("Polynomial Coefficients (highest to lowest degree):")
-    
-    coeffs = fit_result['coefficients']
-    for i, coeff in enumerate(coeffs):
-        power = fit_result['degree'] - i
-        lines.append(f"  {'a' if fit_type == 'forward' else 'b'}{power} = {coeff:.15e}")
-    
-    lines.append("")
-    lines.append("Polynomial Formula:")
-    
-    if fit_type == 'forward':
-        func_parts = []
-        for i, coeff in enumerate(coeffs):
-            power = fit_result['degree'] - i
-            if power == 0:
-                func_parts.append(f"{coeff:.6e}")
-            elif power == 1:
-                func_parts.append(f"{coeff:.6e}*x")
-            else:
-                func_parts.append(f"{coeff:.6e}*x^{power}")
-        lines.append(f"  CDF(x) = {' + '.join(func_parts).replace('+ -', '- ')}")
-    else:
-        func_parts = []
-        for i, coeff in enumerate(coeffs):
-            power = fit_result['degree'] - i
-            if power == 0:
-                func_parts.append(f"{coeff:.6e}")
-            elif power == 1:
-                func_parts.append(f"{coeff:.6e}*p")
-            else:
-                func_parts.append(f"{coeff:.6e}*p^{power}")
-        lines.append(f"  x(p) = {' + '.join(func_parts).replace('+ -', '- ')}")
-    
-    lines.append("")
-    lines.append("="*70)
-    
-    return "\n".join(lines)
-
-
 def format_sensitivity_csv(sensitivity_results):
     """格式化敏感性分析为 CSV"""
     lines = []
@@ -469,16 +415,6 @@ def download_report_zip():
             # 主报告
             report = simulator.generate_report(confidence_levels)
             zf.writestr('analysis_report.txt', report)
-            
-            # CDF Forward Fit 详细信息
-            if simulator.cdf_fit_result:
-                forward_fit = format_cdf_fit_details(simulator.cdf_fit_result, 'forward')
-                zf.writestr('cdf_forward_fit.txt', forward_fit)
-            
-            # CDF Inverse Fit 详细信息
-            if simulator.cdf_inverse_fit_result:
-                inverse_fit = format_cdf_fit_details(simulator.cdf_inverse_fit_result, 'inverse')
-                zf.writestr('cdf_inverse_fit.txt', inverse_fit)
         
         zip_buffer.seek(0)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
