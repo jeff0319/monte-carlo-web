@@ -1072,9 +1072,9 @@ class MonteCarloSimulator:
                 row.append(f"{self.var_samples[var_name][i]:.15e}")
             lines.append(','.join(row))
         
-        # 如果截断了数据，添加说明
-        if len(self.result) > max_samples_to_export:
-            lines.append(f"# ... {len(self.result) - max_samples_to_export} more samples not shown")
+        # # 如果截断了数据，添加说明
+        # if len(self.result) > max_samples_to_export:
+        #     lines.append(f"# ... {len(self.result) - max_samples_to_export} more samples not shown")
         
         return '\n'.join(lines)
     
