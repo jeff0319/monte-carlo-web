@@ -705,7 +705,7 @@ class MonteCarloSimulator:
             ax3.axvline(x=val, color=color, linestyle='--', alpha=0.3, linewidth=1)
             ax3.plot(val, q, 'o', color=color, markersize=10, markeredgecolor='black', markeredgewidth=1.5)
             offset_y = 0.03 if q < 0.9 else -0.05
-            ax3.text(val, q + offset_y, f'{q*100:.0f}%: {val:.2f}', 
+            ax3.text(val, q + offset_y, f'{q*100:.0f}%: {val:.4f}', 
                     fontsize=10, ha='center', 
                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, edgecolor=color))
         
