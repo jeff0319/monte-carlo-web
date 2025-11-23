@@ -6,8 +6,8 @@
 
 - 📊 **灵活的变量输入**
   - 支持原始数据输入（自动拟合分布）
-  - 支持统计参数输入（均值、标准差）
-  - 支持正态分布和 t 分布
+  - 支持统计参数输入（均值、标准差等）
+  - 支持 9 种概率分布类型
   - 可设置采样范围限制
 
 - 🧮 **强大的计算功能**
@@ -153,6 +153,153 @@ sqrt(var_A^2 + var_B^2)
 - 基本运算：`+`、`-`、`*`、`/`、`^`（幂）
 - 三角函数：`sin()`、`cos()`、`tan()`
 - 指数对数：`exp()`、`log()`、`log10()`、`ln()`、`sqrt()`
+
+### 支持的概率分布
+
+系统支持以下 9 种概率分布类型：
+
+#### 1. **正态分布 (Normal/Gaussian)**
+- **参数**: `mean`（均值）, `std`（标准差）
+- **适用场景**: 大多数自然现象、测量误差、中心极限定理适用的情况
+- **示例**:
+  ```json
+  {
+    "name": "revenue",
+    "input_mode": "params",
+    "dist_type": "norm",
+    "mean": 1000000,
+    "std": 50000
+  }
+  ```
+
+#### 2. **t 分布 (Student's t-distribution)**
+- **参数**: `mean`（位置）, `std`（尺度）, `df`（自由度）
+- **适用场景**: 小样本数据、重尾分布、极端值较多的情况
+- **示例**:
+  ```json
+  {
+    "name": "cost",
+    "input_mode": "params",
+    "dist_type": "t",
+    "mean": 800000,
+    "std": 40000,
+    "df": 5
+  }
+  ```
+
+#### 3. **对数正态分布 (Lognormal)**
+- **参数**: `mean`（对数空间均值）, `std`（对数空间标准差）
+- **适用场景**: 价格、收入、资产价值等只能为正的变量
+- **示例**:
+  ```json
+  {
+    "name": "asset_value",
+    "input_mode": "params",
+    "dist_type": "lognormal",
+    "mean": 13.8,
+    "std": 0.5
+  }
+  ```
+
+#### 4. **均匀分布 (Uniform)**
+- **参数**: `min`（最小值）, `max`（最大值）
+- **适用场景**: 所有值等可能、缺乏先验信息的情况
+- **示例**:
+  ```json
+  {
+    "name": "discount_rate",
+    "input_mode": "params",
+    "dist_type": "uniform",
+    "min": 0.05,
+    "max": 0.15
+  }
+  ```
+
+#### 5. **三角分布 (Triangular)**
+- **参数**: `min`（最小值）, `mode`（众数）, `max`（最大值）
+- **适用场景**: 专家估计、项目管理（PERT）、有明确上下限和最可能值
+- **示例**:
+  ```json
+  {
+    "name": "project_duration",
+    "input_mode": "params",
+    "dist_type": "triangular",
+    "min": 10,
+    "mode": 15,
+    "max": 25
+  }
+  ```
+
+#### 6. **Beta 分布 (Beta)**
+- **参数**: `alpha`（形状参数1）, `beta`（形状参数2）, `min`（下界，默认0）, `max`（上界，默认1）
+- **适用场景**: 有界变量、百分比、概率、完成度
+- **示例**:
+  ```json
+  {
+    "name": "completion_rate",
+    "input_mode": "params",
+    "dist_type": "beta",
+    "alpha": 2,
+    "beta": 5,
+    "min": 0,
+    "max": 1
+  }
+  ```
+
+#### 7. **Gamma 分布 (Gamma)**
+- **参数**: `shape`（形状参数）, `scale`（尺度参数）
+- **适用场景**: 等待时间、寿命分析、正偏态数据
+- **示例**:
+  ```json
+  {
+    "name": "waiting_time",
+    "input_mode": "params",
+    "dist_type": "gamma",
+    "shape": 2,
+    "scale": 3
+  }
+  ```
+
+#### 8. **指数分布 (Exponential)**
+- **参数**: `scale`（尺度参数）或 `rate`（速率参数，rate = 1/scale）
+- **适用场景**: 无记忆过程、故障时间、服务时间
+- **示例**:
+  ```json
+  {
+    "name": "failure_time",
+    "input_mode": "params",
+    "dist_type": "exponential",
+    "scale": 100
+  }
+  ```
+
+#### 9. **Weibull 分布 (Weibull)**
+- **参数**: `shape`（形状参数）, `scale`（尺度参数）
+- **适用场景**: 可靠性分析、寿命测试、风速分布
+- **示例**:
+  ```json
+  {
+    "name": "component_lifetime",
+    "input_mode": "params",
+    "dist_type": "weibull",
+    "shape": 1.5,
+    "scale": 5000
+  }
+  ```
+
+### 分布选择指南
+
+| 分布类型 | 支持范围 | 典型应用 | 特点 |
+|---------|---------|---------|------|
+| Normal | (-∞, +∞) | 测量误差、自然现象 | 对称、钟形 |
+| t | (-∞, +∞) | 小样本、重尾数据 | 比正态分布更重的尾部 |
+| Lognormal | (0, +∞) | 价格、收入 | 右偏、只能为正 |
+| Uniform | [min, max] | 缺乏信息时 | 所有值等可能 |
+| Triangular | [min, max] | 专家估计 | 简单、直观 |
+| Beta | [min, max] | 百分比、概率 | 灵活的有界分布 |
+| Gamma | (0, +∞) | 等待时间 | 右偏、只能为正 |
+| Exponential | (0, +∞) | 故障时间 | 无记忆性 |
+| Weibull | (0, +∞) | 可靠性分析 | 灵活的寿命分布 |
 
 #### 自定义函数模式
 ```python
