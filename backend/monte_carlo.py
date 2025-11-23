@@ -23,13 +23,25 @@ class Variable:
     管理单个变量的数据预处理、分布拟合和Monte Carlo抽样
     支持两种输入方式:
     1. 原始数据点
-    2. 统计参数(均值和标准差)
+    2. 统计参数
+    
+    支持的分布类型:
+    - norm/normal: 正态分布
+    - t: t分布
+    - lognormal: 对数正态分布
+    - uniform: 均匀分布
+    - triangular: 三角分布
+    - beta: Beta分布
+    - gamma: Gamma分布
+    - exponential: 指数分布
+    - weibull: Weibull分布
     """
     
     def __init__(self, name: str, data: Optional[np.ndarray] = None, 
-                 mean: Optional[float] = None, std: Optional[float] = None,
-                 dist_type: str = 'norm', df: Optional[float] = None,
-                 min_value: Optional[float] = None, max_value: Optional[float] = None):
+                 dist_type: str = 'norm', 
+                 min_value: Optional[float] = None, 
+                 max_value: Optional[float] = None,
+                 **kwargs):
         """
         初始化变量
         
@@ -39,18 +51,23 @@ class Variable:
             变量名称
         data : np.ndarray, optional
             原始测试数据 (方式1)
-        mean : float, optional
-            均值 (方式2)
-        std : float, optional
-            标准差 (方式2)
         dist_type : str
-            分布类型 ('norm' 或 't'),仅当使用方式2时需要指定
-        df : float, optional
-            自由度,仅当 dist_type='t' 且使用方式2时需要
+            分布类型
         min_value : float, optional
             采样的最小值限制
         max_value : float, optional
             采样的最大值限制
+        **kwargs : 
+            分布参数，根据不同分布类型而定:
+            - norm/normal: mean, std
+            - t: mean, std, df
+            - lognormal: mean, std (对数空间)
+            - uniform: min, max
+            - triangular: min, mode, max
+            - beta: alpha, beta, min, max
+            - gamma: shape, scale
+            - exponential: scale (或 rate)
+            - weibull: shape, scale
         """
         self.name = name
         self.input_mode = None  # 'data' 或 'params'
@@ -66,21 +83,85 @@ class Variable:
             # 方式1: 原始数据
             self.input_mode = 'data'
             self.raw_data = np.array(data)
-        elif mean is not None and std is not None:
+        else:
             # 方式2: 统计参数
             self.input_mode = 'params'
             self.dist_type = dist_type
+            self._parse_params(dist_type, kwargs)
+    
+    def _parse_params(self, dist_type: str, params: dict):
+        """解析分布参数"""
+        if dist_type in ['norm', 'normal']:
+            mean = params.get('mean')
+            std = params.get('std')
+            if mean is None or std is None:
+                raise ValueError("正态分布需要 mean 和 std 参数")
+            self.dist_params = (mean, std)
             
-            if dist_type == 'norm':
-                self.dist_params = (mean, std)
-            elif dist_type == 't':
-                if df is None:
-                    raise ValueError("当使用t分布的统计参数时,必须提供自由度df")
-                self.dist_params = (df, mean, std)
-            else:
-                raise ValueError("dist_type必须是'norm'或't'")
+        elif dist_type == 't':
+            mean = params.get('mean')
+            std = params.get('std')
+            df = params.get('df')
+            if mean is None or std is None or df is None:
+                raise ValueError("t分布需要 mean, std 和 df 参数")
+            self.dist_params = (df, mean, std)
+            
+        elif dist_type == 'lognormal':
+            mean = params.get('mean')
+            std = params.get('std')
+            if mean is None or std is None:
+                raise ValueError("对数正态分布需要 mean 和 std 参数")
+            self.dist_params = (mean, std)
+            
+        elif dist_type == 'uniform':
+            min_val = params.get('min')
+            max_val = params.get('max')
+            if min_val is None or max_val is None:
+                raise ValueError("均匀分布需要 min 和 max 参数")
+            self.dist_params = (min_val, max_val)
+            
+        elif dist_type == 'triangular':
+            min_val = params.get('min')
+            mode = params.get('mode')
+            max_val = params.get('max')
+            if min_val is None or mode is None or max_val is None:
+                raise ValueError("三角分布需要 min, mode 和 max 参数")
+            self.dist_params = (min_val, mode, max_val)
+            
+        elif dist_type == 'beta':
+            alpha = params.get('alpha')
+            beta = params.get('beta')
+            min_val = params.get('min', 0)
+            max_val = params.get('max', 1)
+            if alpha is None or beta is None:
+                raise ValueError("Beta分布需要 alpha 和 beta 参数")
+            self.dist_params = (alpha, beta, min_val, max_val)
+            
+        elif dist_type == 'gamma':
+            shape = params.get('shape')
+            scale = params.get('scale')
+            if shape is None or scale is None:
+                raise ValueError("Gamma分布需要 shape 和 scale 参数")
+            self.dist_params = (shape, scale)
+            
+        elif dist_type == 'exponential':
+            scale = params.get('scale')
+            rate = params.get('rate')
+            if scale is None and rate is None:
+                raise ValueError("指数分布需要 scale 或 rate 参数")
+            if rate is not None:
+                scale = 1.0 / rate
+            self.dist_params = (scale,)
+            
+        elif dist_type == 'weibull':
+            shape = params.get('shape')
+            scale = params.get('scale')
+            if shape is None or scale is None:
+                raise ValueError("Weibull分布需要 shape 和 scale 参数")
+            self.dist_params = (shape, scale)
+            
         else:
-            raise ValueError("必须提供data或者(mean和std)")
+            raise ValueError(f"不支持的分布类型: {dist_type}")
         
     def fit_distribution(self, dist_type: str = 'norm'):
         """
@@ -88,39 +169,89 @@ class Variable:
         
         Parameters:
         -----------
-        dist_type: 'norm' 或 't'
+        dist_type: 支持的分布类型
         """
         if self.input_mode != 'data':
             return
         
         n = len(self.raw_data)
+        self.dist_type = dist_type
         
-        if dist_type == 'norm':
-            self.dist_type = 'norm'
+        if dist_type in ['norm', 'normal']:
             mu = np.mean(self.raw_data)
             sigma = np.std(self.raw_data, ddof=1)
             self.dist_params = (mu, sigma)
         
         elif dist_type == 't':
-            self.dist_type = 't'
             df = n - 1
             loc = np.mean(self.raw_data)
             scale = np.std(self.raw_data, ddof=1)
             self.dist_params = (df, loc, scale)
         
+        elif dist_type == 'lognormal':
+            # 对数正态分布：拟合对数空间的参数
+            log_data = np.log(self.raw_data[self.raw_data > 0])  # 只取正值
+            if len(log_data) == 0:
+                raise ValueError(f"变量 {self.name} 的数据必须为正值才能拟合对数正态分布")
+            mu = np.mean(log_data)
+            sigma = np.std(log_data, ddof=1)
+            self.dist_params = (mu, sigma)
+        
+        elif dist_type == 'uniform':
+            min_val = np.min(self.raw_data)
+            max_val = np.max(self.raw_data)
+            self.dist_params = (min_val, max_val)
+        
+        elif dist_type == 'triangular':
+            min_val = np.min(self.raw_data)
+            max_val = np.max(self.raw_data)
+            mode = np.median(self.raw_data)  # 使用中位数作为众数估计
+            self.dist_params = (min_val, mode, max_val)
+        
+        elif dist_type == 'beta':
+            # Beta分布拟合
+            min_val = np.min(self.raw_data)
+            max_val = np.max(self.raw_data)
+            # 标准化到[0,1]
+            normalized = (self.raw_data - min_val) / (max_val - min_val)
+            # 使用scipy拟合
+            alpha, beta, loc, scale = stats.beta.fit(normalized, floc=0, fscale=1)
+            self.dist_params = (alpha, beta, min_val, max_val)
+        
+        elif dist_type == 'gamma':
+            # Gamma分布拟合（只能用于正值数据）
+            if np.any(self.raw_data <= 0):
+                raise ValueError(f"变量 {self.name} 的数据必须为正值才能拟合Gamma分布")
+            shape, loc, scale = stats.gamma.fit(self.raw_data, floc=0)
+            self.dist_params = (shape, scale)
+        
+        elif dist_type == 'exponential':
+            # 指数分布拟合（只能用于正值数据）
+            if np.any(self.raw_data <= 0):
+                raise ValueError(f"变量 {self.name} 的数据必须为正值才能拟合指数分布")
+            loc, scale = stats.expon.fit(self.raw_data, floc=0)
+            self.dist_params = (scale,)
+        
+        elif dist_type == 'weibull':
+            # Weibull分布拟合（只能用于正值数据）
+            if np.any(self.raw_data <= 0):
+                raise ValueError(f"变量 {self.name} 的数据必须为正值才能拟合Weibull分布")
+            shape, loc, scale = stats.weibull_min.fit(self.raw_data, floc=0)
+            self.dist_params = (shape, scale)
+        
         else:
-            raise ValueError("dist_type必须是'norm'或't'")
+            raise ValueError(f"不支持的分布类型: {dist_type}")
     
     def monte_carlo_sample(self, n_samples: int = 1000000):
         """
-        进行Monte Carlo抽样，支持限值约束（修正版本）
+        进行Monte Carlo抽样，支持限值约束
         """
         if self.dist_params is None:
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
         
         # 无限值约束时直接采样
         if self.min_value is None and self.max_value is None:
-            if self.dist_type == 'norm':
+            if self.dist_type in ['norm', 'normal']:
                 self.samples = np.random.normal(
                     loc=self.dist_params[0],
                     scale=self.dist_params[1],
@@ -133,6 +264,45 @@ class Variable:
                     scale=self.dist_params[2],
                     size=n_samples
                 )
+            elif self.dist_type == 'lognormal':
+                self.samples = np.random.lognormal(
+                    mean=self.dist_params[0],
+                    sigma=self.dist_params[1],
+                    size=n_samples
+                )
+            elif self.dist_type == 'uniform':
+                self.samples = np.random.uniform(
+                    low=self.dist_params[0],
+                    high=self.dist_params[1],
+                    size=n_samples
+                )
+            elif self.dist_type == 'triangular':
+                self.samples = np.random.triangular(
+                    left=self.dist_params[0],
+                    mode=self.dist_params[1],
+                    right=self.dist_params[2],
+                    size=n_samples
+                )
+            elif self.dist_type == 'beta':
+                alpha, beta, min_val, max_val = self.dist_params
+                # 生成[0,1]的beta样本，然后缩放到[min_val, max_val]
+                beta_samples = np.random.beta(alpha, beta, size=n_samples)
+                self.samples = min_val + beta_samples * (max_val - min_val)
+            elif self.dist_type == 'gamma':
+                self.samples = np.random.gamma(
+                    shape=self.dist_params[0],
+                    scale=self.dist_params[1],
+                    size=n_samples
+                )
+            elif self.dist_type == 'exponential':
+                self.samples = np.random.exponential(
+                    scale=self.dist_params[0],
+                    size=n_samples
+                )
+            elif self.dist_type == 'weibull':
+                # NumPy的weibull分布参数与scipy不同，需要转换
+                shape, scale = self.dist_params
+                self.samples = scale * np.random.weibull(shape, size=n_samples)
             return
         
         # 有限值约束时使用拒绝采样
@@ -208,29 +378,127 @@ class Variable:
         
         fig, ax = plt.subplots(1, 1, figsize=figsize)
         
-        # 确定x轴范围
-        if self.input_mode == 'data':
-            x_min = self.raw_data.min() - 6 * self.raw_data.std()
-            x_max = self.raw_data.max() + 6 * self.raw_data.std()
+        # 确定x轴范围 - 根据分布类型和是否有样本数据智能确定
+        if self.samples is not None:
+            # 如果已经有样本，使用样本的范围
+            sample_min = np.min(self.samples)
+            sample_max = np.max(self.samples)
+            sample_std = np.std(self.samples)
+            x_min = sample_min - 0.5 * sample_std
+            x_max = sample_max + 0.5 * sample_std
+        elif self.input_mode == 'data':
+            # 使用原始数据的范围
+            x_min = self.raw_data.min() - 0.5 * self.raw_data.std()
+            x_max = self.raw_data.max() + 0.5 * self.raw_data.std()
         else:
-            mean = self.dist_params[1] if self.dist_type == 't' else self.dist_params[0]
-            std = self.dist_params[2] if self.dist_type == 't' else self.dist_params[1]
-            x_min = mean - 6 * std
-            x_max = mean + 6 * std
+            # 根据分布类型和参数确定范围
+            if self.dist_type in ['norm', 'normal']:
+                mean, std = self.dist_params[0], self.dist_params[1]
+                x_min = mean - 4 * std
+                x_max = mean + 4 * std
+            elif self.dist_type == 't':
+                df, loc, scale = self.dist_params
+                x_min = loc - 4 * scale
+                x_max = loc + 4 * scale
+            elif self.dist_type == 'lognormal':
+                # 对数正态分布：从对数空间参数计算实际空间的范围
+                mu, sigma = self.dist_params[0], self.dist_params[1]
+                # 实际空间的中位数 = exp(mu)
+                median = np.exp(mu)
+                # 使用分位数来确定范围
+                x_min = max(0, stats.lognorm.ppf(0.001, s=sigma, scale=np.exp(mu)))
+                x_max = stats.lognorm.ppf(0.999, s=sigma, scale=np.exp(mu))
+            elif self.dist_type == 'uniform':
+                min_val, max_val = self.dist_params[0], self.dist_params[1]
+                range_width = max_val - min_val
+                x_min = min_val - 0.1 * range_width
+                x_max = max_val + 0.1 * range_width
+            elif self.dist_type == 'triangular':
+                min_val, mode, max_val = self.dist_params
+                range_width = max_val - min_val
+                x_min = min_val - 0.1 * range_width
+                x_max = max_val + 0.1 * range_width
+            elif self.dist_type == 'beta':
+                alpha, beta, min_val, max_val = self.dist_params
+                range_width = max_val - min_val
+                x_min = min_val - 0.1 * range_width
+                x_max = max_val + 0.1 * range_width
+            elif self.dist_type == 'gamma':
+                shape, scale = self.dist_params
+                mean = shape * scale
+                std = np.sqrt(shape) * scale
+                x_min = max(0, mean - 3 * std)
+                x_max = mean + 4 * std
+            elif self.dist_type == 'exponential':
+                scale = self.dist_params[0]
+                x_min = 0
+                x_max = scale * 5  # 约99.3%的数据
+            elif self.dist_type == 'weibull':
+                shape, scale = self.dist_params
+                x_min = 0
+                x_max = scale * 3  # 根据shape调整
+            else:
+                # 默认范围
+                x_min, x_max = 0, 10
         
-        x_range = np.linspace(x_min, x_max, 200)
+        x_range = np.linspace(x_min, x_max, 500)
         
         # 绘制拟合的分布曲线
-        if self.dist_type == 'norm':
+        if self.dist_type in ['norm', 'normal']:
             pdf = stats.norm.pdf(x_range, self.dist_params[0], self.dist_params[1])
             ax.plot(x_range, pdf, 'r-', lw=2.5, 
                    label=f'Normal Distribution\nμ={self.dist_params[0]:.3f}, σ={self.dist_params[1]:.3f}', 
                    zorder=3)
-        else:
+        elif self.dist_type == 't':
             pdf = stats.t.pdf(x_range, self.dist_params[0], self.dist_params[1], self.dist_params[2])
             ax.plot(x_range, pdf, 'r-', lw=2.5, 
                    label=f't Distribution\ndf={self.dist_params[0]:.2f}, loc={self.dist_params[1]:.3f}, scale={self.dist_params[2]:.3f}', 
                    zorder=3)
+        elif self.dist_type == 'lognormal':
+            pdf = stats.lognorm.pdf(x_range, s=self.dist_params[1], scale=np.exp(self.dist_params[0]))
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Lognormal Distribution\nμ={self.dist_params[0]:.3f}, σ={self.dist_params[1]:.3f}',
+                   zorder=3)
+        elif self.dist_type == 'uniform':
+            pdf = stats.uniform.pdf(x_range, loc=self.dist_params[0], scale=self.dist_params[1]-self.dist_params[0])
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Uniform Distribution\nmin={self.dist_params[0]:.3f}, max={self.dist_params[1]:.3f}',
+                   zorder=3)
+        elif self.dist_type == 'triangular':
+            # 三角分布的PDF
+            c = (self.dist_params[1] - self.dist_params[0]) / (self.dist_params[2] - self.dist_params[0])
+            pdf = stats.triang.pdf(x_range, c, loc=self.dist_params[0], scale=self.dist_params[2]-self.dist_params[0])
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Triangular Distribution\nmin={self.dist_params[0]:.3f}, mode={self.dist_params[1]:.3f}, max={self.dist_params[2]:.3f}',
+                   zorder=3)
+        elif self.dist_type == 'beta':
+            alpha, beta, min_val, max_val = self.dist_params
+            # 标准化x_range到[0,1]
+            x_normalized = (x_range - min_val) / (max_val - min_val)
+            x_normalized = np.clip(x_normalized, 0, 1)
+            pdf = stats.beta.pdf(x_normalized, alpha, beta) / (max_val - min_val)
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Beta Distribution\nα={alpha:.3f}, β={beta:.3f}\nrange=[{min_val:.3f}, {max_val:.3f}]',
+                   zorder=3)
+        elif self.dist_type == 'gamma':
+            pdf = stats.gamma.pdf(x_range, a=self.dist_params[0], scale=self.dist_params[1])
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Gamma Distribution\nshape={self.dist_params[0]:.3f}, scale={self.dist_params[1]:.3f}',
+                   zorder=3)
+        elif self.dist_type == 'exponential':
+            pdf = stats.expon.pdf(x_range, scale=self.dist_params[0])
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Exponential Distribution\nscale={self.dist_params[0]:.3f}',
+                   zorder=3)
+        elif self.dist_type == 'weibull':
+            pdf = stats.weibull_min.pdf(x_range, c=self.dist_params[0], scale=self.dist_params[1])
+            ax.plot(x_range, pdf, 'r-', lw=2.5,
+                   label=f'Weibull Distribution\nshape={self.dist_params[0]:.3f}, scale={self.dist_params[1]:.3f}',
+                   zorder=3)
+        else:
+            # 默认情况
+            pdf = np.ones_like(x_range) * 0.01
+            ax.plot(x_range, pdf, 'r-', lw=2.5, label=f'{self.dist_type} Distribution', zorder=3)
         
         # 如果有Monte Carlo样本且需要显示
         has_samples = self.samples is not None and show_samples
@@ -294,22 +562,42 @@ class MonteCarloSimulator:
         self.chart_cache = {}  # 图表缓存
     
     def add_variable(self, name: str, data: Optional[np.ndarray] = None,
-                    mean: Optional[float] = None, std: Optional[float] = None,
-                    dist_type: str = 'norm', df: Optional[float] = None,
-                    min_value: Optional[float] = None, max_value: Optional[float] = None):
+                    dist_type: str = 'norm', 
+                    min_value: Optional[float] = None, 
+                    max_value: Optional[float] = None,
+                    **kwargs):
         """
         添加一个变量
+        
+        Parameters:
+        -----------
+        name : str
+            变量名称
+        data : np.ndarray, optional
+            原始数据（如果提供，则为 data 模式）
+        dist_type : str
+            分布类型
+        min_value : float, optional
+            采样最小值限制
+        max_value : float, optional
+            采样最大值限制
+        **kwargs : 
+            其他分布参数（根据分布类型而定）
         """
         # 标准化 dist_type
         if dist_type == 'normal':
             dist_type = 'norm'
         
-        var = Variable(name, data=data, mean=mean, std=std, dist_type=dist_type, 
-                      df=df, min_value=min_value, max_value=max_value)
-        
-        # 如果是原始数据输入，进行分布拟合
-        if var.input_mode == 'data':
+        # 如果提供了 data，使用 data 模式
+        if data is not None:
+            var = Variable(name, data=data, dist_type=dist_type, 
+                          min_value=min_value, max_value=max_value)
+            # 进行分布拟合
             var.fit_distribution(dist_type)
+        else:
+            # 使用 params 模式，传递所有参数
+            var = Variable(name, dist_type=dist_type, 
+                          min_value=min_value, max_value=max_value, **kwargs)
         
         self.variables[name] = var
     
@@ -373,15 +661,18 @@ class MonteCarloSimulator:
                                 min_value=min_value, max_value=max_value)
             
             elif input_mode == 'params':
-                mean = var_def.get('mean')
-                std = var_def.get('std')
-                df = var_def.get('df')
+                # 提取所有可能的参数
+                params = {}
                 
-                if mean is None or std is None:
-                    raise ValueError(f"变量 {name} 使用 params 模式但未提供 mean 或 std")
+                # 通用参数
+                for key in ['mean', 'std', 'df', 'min', 'max', 'mode', 'alpha', 'beta', 
+                           'shape', 'scale', 'rate']:
+                    if key in var_def:
+                        params[key] = var_def[key]
                 
-                self.add_variable(name, mean=mean, std=std, dist_type=dist_type, df=df,
-                                min_value=min_value, max_value=max_value)
+                # 使用 add_variable 方法，它会处理参数验证
+                self.add_variable(name, dist_type=dist_type, 
+                                min_value=min_value, max_value=max_value, **params)
             else:
                 raise ValueError(f"变量 {name} 的 input_mode 必须是 'data' 或 'params'")
     
@@ -615,9 +906,17 @@ class MonteCarloSimulator:
         
         return analysis
     
-    def plot_result(self, figsize=(15, 10)):
+    def plot_result(self, figsize=(15, 10), trim_percentile=0.1):
         """
         绘制结果的多种统计图,返回base64编码的图片
+        
+        Parameters:
+        -----------
+        figsize : tuple
+            图形大小
+        trim_percentile : float
+            裁剪极端尾部的百分位数阈值（默认0.5%，即裁剪两端各0.5%的极端值）
+            设置为0则不裁剪，显示全部数据范围
         """
         if self.result is None:
             raise ValueError("请先运行模拟")
@@ -629,6 +928,22 @@ class MonteCarloSimulator:
         median_val = np.median(self.result)
         std_val = np.std(self.result)
         
+        # 智能确定显示范围：裁剪极端尾部以聚焦主要分布
+        if trim_percentile > 0:
+            # 使用分位数裁剪极端值
+            lower_bound = np.percentile(self.result, trim_percentile)
+            upper_bound = np.percentile(self.result, 100 - trim_percentile)
+            
+            # 添加一些边距使图形更美观
+            data_range = upper_bound - lower_bound
+            margin = data_range * 0.05  # 5%的边距
+            x_min_display = lower_bound - margin
+            x_max_display = upper_bound + margin
+        else:
+            # 不裁剪，显示全部范围
+            x_min_display = self.result.min()
+            x_max_display = self.result.max()
+        
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])
         ax1.hist(self.result, bins=100, density=True, alpha=0.6, 
@@ -636,8 +951,12 @@ class MonteCarloSimulator:
         
         from scipy.stats import gaussian_kde
         kde = gaussian_kde(self.result)
-        x_range = np.linspace(self.result.min(), self.result.max(), 200)
+        # 在裁剪后的范围内生成KDE曲线
+        x_range = np.linspace(x_min_display, x_max_display, 200)
         ax1.plot(x_range, kde(x_range), 'r-', lw=2, label='KDE')
+        
+        # 设置x轴显示范围
+        ax1.set_xlim(x_min_display, x_max_display)
         
         ax1.axvline(x=median_val, color='darkred', linestyle='-', 
                 linewidth=2.5, alpha=0.8, label=f'Median: {median_val:.4f}')
@@ -679,14 +998,6 @@ class MonteCarloSimulator:
                         whiskerprops=dict(linewidth=1.5),
                         capprops=dict(linewidth=1.5))
         
-        from matplotlib.offsetbox import AnchoredText
-        stats_text = f"Mean: {mean_val:.4f}\nMedian: {median_val:.4f}\nStd: {std_val:.4f}"
-        anchored_text = AnchoredText(stats_text, loc='upper right', 
-                                    frameon=True, pad=0.5, prop=dict(size=10))
-        anchored_text.patch.set_boxstyle("round,pad=0.5")
-        anchored_text.patch.set_alpha(0.9)
-        ax2.add_artist(anchored_text)
-        
         ax2.set_ylabel(f'{self.result_name} Value', fontsize=12)
         ax2.set_title(f'{self.result_name} - Box Plot', fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='y')
@@ -715,6 +1026,9 @@ class MonteCarloSimulator:
         ax3.legend(fontsize=11, loc='lower right')
         ax3.grid(True, alpha=0.3)
         ax3.set_ylim(-0.05, 1.05)
+        
+        # 设置 CDF 的 x 轴范围与 distribution 图一致
+        ax3.set_xlim(x_min_display, x_max_display)
         
         # 转换为base64
         buf = io.BytesIO()
@@ -1255,11 +1569,18 @@ class MonteCarloSimulator:
         plt.title(f'{self.result_name} - Sensitivity Analysis Pareto Chart', 
                  fontsize=15, fontweight='bold', pad=20)
         
-        # 合并图例
+        # 合并图例 - 智能放置，避免与左侧长条形图重叠
         lines1, labels1 = ax1.get_legend_handles_labels()
         lines2, labels2 = ax2.get_legend_handles_labels()
+        
+        # 判断第一个变量的贡献度，如果很高（>40%），图例放右上角；否则放左上角
+        if contributions and contributions[0] > 40:
+            legend_loc = 'upper right'
+        else:
+            legend_loc = 'upper left'
+        
         ax1.legend(lines1 + lines2, labels1 + labels2, 
-                  loc='upper left', fontsize=11, framealpha=0.9)
+                  loc=legend_loc, fontsize=11, framealpha=0.9)
         
         ax1.grid(True, alpha=0.3, axis='y')
         

@@ -61,7 +61,7 @@ def index():
 
 @app.route('/api/add_variable', methods=['POST'])
 def add_variable():
-    """添加变量（已废弃，保留用于向后兼容）"""
+    """添加变量（支持所有9种分布类型）"""
     try:
         simulator = get_user_simulator()
         
@@ -70,27 +70,94 @@ def add_variable():
         input_mode = data.get('input_mode')  # 'data' 或 'params'
         min_value = data.get('min_value')
         max_value = data.get('max_value')
+        dist_type = data.get('dist_type', 'norm')
+        
+        # 支持的分布类型
+        supported_dists = ['norm', 'normal', 't', 'lognormal', 'uniform', 
+                          'triangular', 'beta', 'gamma', 'exponential', 'weibull']
+        
+        if dist_type not in supported_dists:
+            return jsonify({'error': f'不支持的分布类型: {dist_type}. 支持的类型: {", ".join(supported_dists)}'}), 400
         
         if input_mode == 'data':
             # 原始数据输入
             raw_data = data.get('data', [])
-            dist_type = data.get('dist_type', 'normal')
-            # 确保使用 'normal' 或 't'
-            if dist_type not in ['normal', 't', 'norm']:
-                dist_type = 'normal'
             simulator.add_variable(name, data=raw_data, dist_type=dist_type, 
                                  min_value=min_value, max_value=max_value)
+        
         elif input_mode == 'params':
-            # 统计参数输入
-            mean = data.get('mean')
-            std = data.get('std')
-            dist_type = data.get('dist_type', 'normal')
-            # 确保使用 'normal' 或 't'
-            if dist_type not in ['normal', 't', 'norm']:
-                dist_type = 'normal'
-            df = data.get('df', None)
-            simulator.add_variable(name, mean=mean, std=std, dist_type=dist_type, df=df,
-                                 min_value=min_value, max_value=max_value)
+            # 统计参数输入 - 根据分布类型提取不同的参数
+            params = {'dist_type': dist_type}
+            
+            if dist_type in ['norm', 'normal']:
+                params['mean'] = data.get('mean')
+                params['std'] = data.get('std')
+                if params['mean'] is None or params['std'] is None:
+                    return jsonify({'error': '正态分布需要 mean 和 std 参数'}), 400
+            
+            elif dist_type == 't':
+                params['mean'] = data.get('mean')
+                params['std'] = data.get('std')
+                params['df'] = data.get('df')
+                if params['mean'] is None or params['std'] is None or params['df'] is None:
+                    return jsonify({'error': 't分布需要 mean, std 和 df 参数'}), 400
+            
+            elif dist_type == 'lognormal':
+                params['mean'] = data.get('mean')
+                params['std'] = data.get('std')
+                if params['mean'] is None or params['std'] is None:
+                    return jsonify({'error': '对数正态分布需要 mean 和 std 参数（对数空间）'}), 400
+            
+            elif dist_type == 'uniform':
+                params['min'] = data.get('min')
+                params['max'] = data.get('max')
+                if params['min'] is None or params['max'] is None:
+                    return jsonify({'error': '均匀分布需要 min 和 max 参数'}), 400
+            
+            elif dist_type == 'triangular':
+                params['min'] = data.get('min')
+                params['mode'] = data.get('mode')
+                params['max'] = data.get('max')
+                if params['min'] is None or params['mode'] is None or params['max'] is None:
+                    return jsonify({'error': '三角分布需要 min, mode 和 max 参数'}), 400
+            
+            elif dist_type == 'beta':
+                params['alpha'] = data.get('alpha')
+                params['beta'] = data.get('beta')
+                params['min'] = data.get('min', 0)
+                params['max'] = data.get('max', 1)
+                if params['alpha'] is None or params['beta'] is None:
+                    return jsonify({'error': 'Beta分布需要 alpha 和 beta 参数'}), 400
+            
+            elif dist_type == 'gamma':
+                params['shape'] = data.get('shape')
+                params['scale'] = data.get('scale')
+                if params['shape'] is None or params['scale'] is None:
+                    return jsonify({'error': 'Gamma分布需要 shape 和 scale 参数'}), 400
+            
+            elif dist_type == 'exponential':
+                params['scale'] = data.get('scale')
+                params['rate'] = data.get('rate')
+                if params['scale'] is None and params['rate'] is None:
+                    return jsonify({'error': '指数分布需要 scale 或 rate 参数'}), 400
+            
+            elif dist_type == 'weibull':
+                params['shape'] = data.get('shape')
+                params['scale'] = data.get('scale')
+                if params['shape'] is None or params['scale'] is None:
+                    return jsonify({'error': 'Weibull分布需要 shape 和 scale 参数'}), 400
+            
+            # 添加限值参数
+            if min_value is not None:
+                params['min_value'] = min_value
+            if max_value is not None:
+                params['max_value'] = max_value
+            
+            # 创建变量
+            from monte_carlo import Variable
+            var = Variable(name, **params)
+            simulator.variables[name] = var
+        
         else:
             return jsonify({'error': 'Invalid input_mode'}), 400
         

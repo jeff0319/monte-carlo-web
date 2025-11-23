@@ -29,11 +29,17 @@
         document.querySelectorAll('input[name="formulaType"]').forEach(radio => {
             radio.addEventListener('change', function() {
                 if (this.value === 'simple') {
+                    // 显示 Simple Formula 输入框和示例
                     document.getElementById('simpleFormulaDiv').style.display = 'block';
                     document.getElementById('advancedFormulaDiv').style.display = 'none';
+                    document.getElementById('simpleFormulaExamples').style.display = 'block';
+                    document.getElementById('advancedFormulaExamples').style.display = 'none';
                 } else {
+                    // 显示 Advanced Formula 输入框和示例
                     document.getElementById('simpleFormulaDiv').style.display = 'none';
                     document.getElementById('advancedFormulaDiv').style.display = 'block';
+                    document.getElementById('simpleFormulaExamples').style.display = 'none';
+                    document.getElementById('advancedFormulaExamples').style.display = 'block';
                 }
             });
         });
@@ -312,10 +318,20 @@
                     varTitle.style.marginTop = '15px';
                     resultsDiv.appendChild(varTitle);
 
+                    // 添加容器确保宽度一致
+                    const imgContainer = document.createElement('div');
+                    imgContainer.style.width = '100%';
+                    imgContainer.style.display = 'block';
+                    
                     const img = document.createElement('img');
                     img.src = 'data:image/png;base64,' + imgData;
                     img.className = 'chart-image';
-                    resultsDiv.appendChild(img);
+                    img.style.width = '100%';
+                    img.style.height = 'auto';
+                    img.style.display = 'block';
+                    
+                    imgContainer.appendChild(img);
+                    resultsDiv.appendChild(imgContainer);
                 }
             }
 
@@ -505,4 +521,114 @@
             const now = new Date();
             const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
             downloadFile('/api/download_full_zip', `monte_carlo_full_${timestamp}.zip`);
+        }
+
+        // ==================== 复制功能 ====================
+        
+        // 复制示例代码到剪贴板
+        function copyExample(button, targetId) {
+            // 获取目标输入框
+            const targetElement = document.getElementById(targetId);
+            if (!targetElement) {
+                showStatus('Target input not found', 'error');
+                return;
+            }
+
+            // 获取按钮所在的 example-code 容器
+            const exampleCode = button.closest('.example-code');
+            if (!exampleCode) {
+                showStatus('Example code not found', 'error');
+                return;
+            }
+
+            // 获取 pre > code 中的文本内容
+            const codeElement = exampleCode.querySelector('pre code');
+            if (!codeElement) {
+                showStatus('Code content not found', 'error');
+                return;
+            }
+
+            const codeText = codeElement.textContent.trim();
+
+            // 复制到剪贴板
+            navigator.clipboard.writeText(codeText).then(() => {
+                // 填充到目标输入框
+                targetElement.value = codeText;
+
+                // 根据内容自动调整输入框高度
+                adjustTextareaHeight(targetElement, codeText);
+
+                // 更新按钮状态
+                const originalHTML = button.innerHTML;
+                button.innerHTML = '✓ Copied!';
+                button.classList.add('copied');
+
+                // 显示成功消息
+                showStatus('Example copied to input field', 'success');
+
+                // 折叠示例区域
+                const collapsibleHeader = button.closest('.collapsible').querySelector('.collapsible-header');
+                if (collapsibleHeader && collapsibleHeader.classList.contains('active')) {
+                    toggleCollapsible(collapsibleHeader);
+                }
+
+                // 延迟聚焦，等待折叠动画完成
+                setTimeout(() => {
+                    // 聚焦到输入框
+                    targetElement.focus();
+                    
+                    // 滚动到输入框位置
+                    targetElement.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center' 
+                    });
+                }, 350); // 等待折叠动画（300ms）完成
+
+                // 2秒后恢复按钮
+                setTimeout(() => {
+                    button.innerHTML = originalHTML;
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                showStatus('Copy failed: ' + err.message, 'error');
+            });
+        }
+
+        // 根据内容自动调整 textarea 高度
+        function adjustTextareaHeight(element, content) {
+            // 只对 textarea 元素调整高度，input 元素不需要调整
+            if (element.tagName.toLowerCase() !== 'textarea') {
+                return;
+            }
+            
+            // 计算行数
+            const lines = content.split('\n').length;
+            
+            // 根据不同的 textarea 设置不同的最小高度
+            let minLines, maxLines;
+            
+            if (element.id === 'jsonInput') {
+                // JSON 输入框：与 Python 函数一致
+                minLines = 5;
+                maxLines = 25;
+            } else if (element.id === 'customFunction') {
+                // Python 函数输入框
+                minLines = 5;
+                maxLines = 25;
+            } else {
+                // 其他 textarea
+                minLines = 5;
+                maxLines = 25;
+            }
+            
+            // 计算目标行数（不增加缓冲，精确匹配内容）
+            const targetLines = Math.min(Math.max(lines, minLines), maxLines);
+            
+            // 每行大约 20px（根据 font-size 和 line-height）
+            const lineHeight = 20;
+            const newHeight = targetLines * lineHeight;
+            
+            // 设置新高度
+            element.style.height = newHeight + 'px';
+            element.style.minHeight = (minLines * lineHeight) + 'px';
         }

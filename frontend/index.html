@@ -33,7 +33,7 @@
                                 <strong>必填字段:</strong>
                                 <ul style="margin: 8px 0; padding-left: 20px;">
                                     <li><code>type</code>: "data" (使用实测数据) 或 "params" (使用统计参数)</li>
-                                    <li><code>distribution</code>: "normal" (正态分布) 或 "t" (t分布)</li>
+                                    <li><code>distribution</code>: 分布类型（见下方支持的9种分布）</li>
                                 </ul>
                                 <strong>可选字段:</strong>
                                 <ul style="margin: 8px 0; padding-left: 20px;">
@@ -41,18 +41,95 @@
                                 </ul>
                                 <strong>Data 类型需要:</strong> <code>values</code> (数组)
                                 <br>
-                                <strong>Params 类型需要:</strong> <code>mean</code>, <code>std</code>; 如果是 t 分布还需要 <code>df</code> (自由度)
+                                <strong>Params 类型需要:</strong> 根据分布类型不同而不同（见下方各分布参数说明）
                             </div>
 
-                            <h4>示例 1: 实测数据 + 正态分布</h4>
+                            <h4>支持的9种概率分布</h4>
+                            <div class="help-text" style="background: #f8f9fa; padding: 12px; border-radius: 4px; margin-bottom: 15px;">
+                                <table style="width: 100%; border-collapse: collapse;">
+                                    <tr style="border-bottom: 1px solid #ddd;">
+                                        <th style="text-align: left; padding: 8px;">分布类型</th>
+                                        <th style="text-align: left; padding: 8px;">参数</th>
+                                        <th style="text-align: left; padding: 8px;">适用场景</th>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>normal</code></td>
+                                        <td style="padding: 8px;">mean, std</td>
+                                        <td style="padding: 8px;">测量误差、自然现象</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>t</code></td>
+                                        <td style="padding: 8px;">mean, std, df</td>
+                                        <td style="padding: 8px;">小样本、重尾数据</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>lognormal</code></td>
+                                        <td style="padding: 8px;">mean, std (对数空间)</td>
+                                        <td style="padding: 8px;">价格、收入、资产</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>uniform</code></td>
+                                        <td style="padding: 8px;">min, max</td>
+                                        <td style="padding: 8px;">等可能、缺乏信息</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>triangular</code></td>
+                                        <td style="padding: 8px;">min, mode, max</td>
+                                        <td style="padding: 8px;">专家估计、项目管理</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>beta</code></td>
+                                        <td style="padding: 8px;">alpha, beta, min, max</td>
+                                        <td style="padding: 8px;">百分比、概率、完成度</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>gamma</code></td>
+                                        <td style="padding: 8px;">shape, scale</td>
+                                        <td style="padding: 8px;">等待时间、寿命分析</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>exponential</code></td>
+                                        <td style="padding: 8px;">scale (或 rate)</td>
+                                        <td style="padding: 8px;">故障时间、服务时间</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 8px;"><code>weibull</code></td>
+                                        <td style="padding: 8px;">shape, scale</td>
+                                        <td style="padding: 8px;">可靠性分析、风速</td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <h4>示例 1: t 分布 (Student's t)</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
-  "测量A": {
+  "C": {
+    "type": "data",
+    "values": [1255.80,1168.12, 1275.73, 1164.53, 1119.68, 1123.21, 1078.96, 955.83, 1309.05],
+    "distribution": "t",
+    "min_limit": 500
+  },
+  "P1": {
+    "type": "data",
+    "values": [43.90, 80.05, 60.24, 90.22, 109.52, 84.03, 101.04, 84.60, 73.26, 62.71, 80.72, 85.11, 65.42, 51.02, 133.96,
+224.57, 96.98, 55.98, 112.91, 158.73, 63.67, 53.70, 45.55, 89.25],
+    "distribution": "t",
+    "min_limit": 0.1
+  }
+}</code></pre>
+                            </div>
+
+                            <h4>示例 2: 正态分布 (Normal)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "测量值": {
     "type": "data",
     "values": [10.5, 11.2, 9.8, 10.1, 10.7, 11.0, 10.3],
     "distribution": "normal"
   },
-  "理论B": {
+  "理论值": {
     "type": "params",
     "mean": 100,
     "std": 5,
@@ -61,12 +138,144 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 2: 带限值的组合</h4>
+                            <h4>示例 3: 对数正态分布 (Lognormal)</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "资产价值": {
+    "type": "params",
+    "mean": 13.8,
+    "std": 0.5,
+    "distribution": "lognormal"
+  }
+}</code></pre>
+                            <div class="help-text">注意：mean 和 std 是对数空间的参数</div>
+                            </div>
+
+                            <h4>示例 4: 均匀分布 (Uniform)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "折扣率": {
+    "type": "params",
+    "min": 0.05,
+    "max": 0.15,
+    "distribution": "uniform"
+  }
+}</code></pre>
+                            </div>
+
+                            <h4>示例 5: 三角分布 (Triangular)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "项目工期": {
+    "type": "params",
+    "min": 10,
+    "mode": 15,
+    "max": 25,
+    "distribution": "triangular"
+  }
+}</code></pre>
+                            <div class="help-text">适用于有最小值、最可能值、最大值的专家估计</div>
+                            </div>
+
+                            <h4>示例 6: Beta 分布</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "完成率": {
+    "type": "params",
+    "alpha": 2,
+    "beta": 5,
+    "min": 0,
+    "max": 1,
+    "distribution": "beta"
+  }
+}</code></pre>
+                            <div class="help-text">适用于有界变量，如百分比、概率等</div>
+                            </div>
+
+                            <h4>示例 7: Gamma 分布</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "等待时间": {
+    "type": "params",
+    "shape": 2,
+    "scale": 3,
+    "distribution": "gamma"
+  }
+}</code></pre>
+                            </div>
+
+                            <h4>示例 8: 指数分布 (Exponential)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "故障时间": {
+    "type": "params",
+    "scale": 100,
+    "distribution": "exponential"
+  }
+}</code></pre>
+                            <div class="help-text">也可以使用 rate 参数（rate = 1/scale）</div>
+                            </div>
+
+                            <h4>示例 9: Weibull 分布</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "元件寿命": {
+    "type": "params",
+    "shape": 1.5,
+    "scale": 5000,
+    "distribution": "weibull"
+  }
+}</code></pre>
+                            </div>
+
+                            <h4>示例 10: 混合使用多种分布</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "收入": {
+    "type": "params",
+    "mean": 13.8,
+    "std": 0.5,
+    "distribution": "lognormal"
+  },
+  "成本": {
+    "type": "params",
+    "mean": 100000,
+    "std": 5000,
+    "distribution": "normal"
+  },
+  "折扣": {
+    "type": "params",
+    "min": 0.05,
+    "max": 0.15,
+    "distribution": "uniform"
+  },
+  "完成度": {
+    "type": "params",
+    "alpha": 8,
+    "beta": 2,
+    "min": 0,
+    "max": 1,
+    "distribution": "beta"
+  }
+}</code></pre>
+                            </div>
+
+                            <h4>示例 11: 带限值约束</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
   "温度": {
-    "type": "data",
-    "values": [20.1, 20.5, 19.8, 20.3, 20.2, 19.9, 20.4],
+    "type": "params",
+    "mean": 20,
+    "std": 3,
     "distribution": "normal",
     "min_limit": 15,
     "max_limit": 25
@@ -80,54 +289,7 @@
     "max_limit": 115
   }
 }</code></pre>
-                            </div>
-
-                            <h4>示例 3: 使用 t 分布</h4>
-                            <div class="example-code">
-<pre><code>{
-  "小样本数据": {
-    "type": "data",
-    "values": [50.2, 49.8, 50.5, 50.1, 50.3],
-    "distribution": "t"
-  },
-  "参数估计": {
-    "type": "params",
-    "mean": 50,
-    "std": 2,
-    "df": 10,
-    "distribution": "t",
-    "min_limit": 40,
-    "max_limit": 60
-  }
-}</code></pre>
-                            </div>
-
-                            <h4>示例 4: 完整案例（混合使用）</h4>
-                            <div class="example-code">
-<pre><code>{
-  "var_A": {
-    "type": "data",
-    "values": [10.5, 11.2, 9.8, 10.1, 10.7, 11.0, 10.3, 10.8],
-    "distribution": "normal",
-    "min_limit": 8,
-    "max_limit": 13
-  },
-  "var_B": {
-    "type": "params",
-    "mean": 100,
-    "std": 5,
-    "distribution": "normal"
-  },
-  "var_C": {
-    "type": "params",
-    "mean": 50,
-    "std": 2,
-    "df": 15,
-    "distribution": "t",
-    "min_limit": 45,
-    "max_limit": 55
-  }
-}</code></pre>
+                            <div class="help-text">min_limit 和 max_limit 会限制采样范围</div>
                             </div>
                         </div>
                     </div>
@@ -154,15 +316,102 @@
             <div class="step">
                 <h2>Step 2: Define Function</h2>
 
-                <!-- Collapsible Formula Examples -->
-                <div class="collapsible">
+                <!-- Collapsible Simple Formula Examples -->
+                <div class="collapsible" id="simpleFormulaExamples">
                     <div class="collapsible-header" onclick="toggleCollapsible(this)">
-                        📖 Show Formula Examples
+                        📖 Show Simple Formula Examples
+                    </div>
+                    <div class="collapsible-content">
+                        <div class="example-section">
+                            <h4>示例 1: 百分比计算</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>1 - P1 / C</code></pre>
+                            </div>
+                            <div class="help-text">计算剩余比例（常用）</div>
+
+                            <h4>示例 2: 基本算术运算</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>A + B</code></pre>
+                            </div>
+                            <div class="help-text">两个变量相加</div>
+
+                            <h4>示例 3: 乘法和除法</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>收入 * 折扣率</code></pre>
+                            </div>
+                            <div class="help-text">计算折扣后的收入</div>
+
+                            <h4>示例 4: 复合运算</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>(收入 - 成本) / 收入</code></pre>
+                            </div>
+                            <div class="help-text">计算利润率</div>
+
+                            <h4>示例 5: 加权平均</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>温度 * 0.6 + 压力 * 0.4</code></pre>
+                            </div>
+                            <div class="help-text">两个变量的加权求和</div>
+
+                            <h4>示例 6: 幂运算</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>A**2 + B**2</code></pre>
+                            </div>
+                            <div class="help-text">平方和计算</div>
+
+                            <h4>示例 7: 多变量组合</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>(A + B) * C - D</code></pre>
+                            </div>
+                            <div class="help-text">多个变量的复合计算</div>
+
+                            <h4>示例 8: 数学函数 - 三角函数</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>sin(弧度) + cos(弧度)</code></pre>
+                            </div>
+                            <div class="help-text">使用三角函数（用弧度）</div>
+
+                            <h4>示例 9: 数学函数 - 指数和对数</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>exp(A) + log(B)</code></pre>
+                            </div>
+                            <div class="help-text">指数函数和自然对数</div>
+
+                            <h4>示例 10: 数学函数 - 平方根</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'formula')">📋 Copy</button>
+<pre><code>sqrt(A**2 + B**2)</code></pre>
+                            </div>
+                            <div class="help-text">计算向量长度</div>
+
+                            <div class="help-text" style="margin-top: 15px;">
+                                <strong>支持的运算符:</strong> +（加）、-（减）、*（乘）、/（除）、**（幂）、()（括号）
+                                <br>
+                                <strong>支持的数学函数:</strong> sin, cos, tan, exp, log, log10, sqrt, abs, pow
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Collapsible Advanced Formula Examples -->
+                <div class="collapsible" id="advancedFormulaExamples" style="display: none;">
+                    <div class="collapsible-header" onclick="toggleCollapsible(this)">
+                        📖 Show Advanced Formula Examples
                     </div>
                     <div class="collapsible-content">
                         <div class="example-section">
                             <h4>示例 1: 简单算术运算</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'customFunction')">📋 Copy</button>
 <pre><code>def custom_formula(vars):
     """简单的加权求和"""
     return vars['温度'] * 0.6 + vars['压力'] * 0.4</code></pre>
@@ -170,6 +419,7 @@
 
                             <h4>示例 2: 使用 NumPy 数学函数</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'customFunction')">📋 Copy</button>
 <pre><code>def custom_formula(vars):
     """使用数学函数计算"""
     import numpy as np
@@ -180,6 +430,7 @@
 
                             <h4>示例 3: 条件判断</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'customFunction')">📋 Copy</button>
 <pre><code>def custom_formula(vars):
     """根据条件计算不同结果"""
     import numpy as np
@@ -191,6 +442,7 @@
 
                             <h4>示例 4: 工程计算公式</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'customFunction')">📋 Copy</button>
 <pre><code>def custom_formula(vars):
     """理想气体状态方程 PV = nRT"""
     import numpy as np
@@ -205,6 +457,7 @@
 
                             <h4>示例 5: 多步骤复杂计算</h4>
                             <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'customFunction')">📋 Copy</button>
 <pre><code>def custom_formula(vars):
     """分步骤的复杂计算示例"""
     import numpy as np
@@ -242,8 +495,8 @@
 
                 <div id="simpleFormulaDiv">
                     <div class="form-group">
-                        <label for="formula">Formula</label>
-                        <input type="text" id="formula" placeholder="e.g., var_A + var_B * var_C">
+                        <label for="formula">Simple Formula</label>
+                        <input type="text" id="formula" placeholder="e.g., 1 - P1 / C">
                         <div class="help-text">Use variable names directly in the formula</div>
                     </div>
                 </div>

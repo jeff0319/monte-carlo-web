@@ -325,8 +325,9 @@
         }
 
         .collapsible-content.show {
-            max-height: 2000px;
+            max-height: none;
             padding: 15px;
+            overflow: visible;
         }
 
         .example-section {
@@ -345,6 +346,37 @@
             border-radius: 6px;
             padding: 12px;
             margin: 8px 0;
+            position: relative;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #C47C4A;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .copy-btn:hover {
+            background: #B36B39;
+            transform: translateY(-1px);
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .copy-btn.copied {
+            background: #52A574;
         }
 
         .help-text {
