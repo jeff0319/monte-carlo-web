@@ -245,129 +245,56 @@ class Variable:
     def monte_carlo_sample(self, n_samples: int = 1000000):
         """
         进行Monte Carlo抽样，支持限值约束
+        使用逆向CDF方法（Inverse Transform Sampling）统一处理所有分布
         """
         if self.dist_params is None:
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
-        
-        # 无限值约束时直接采样
-        if self.min_value is None and self.max_value is None:
-            if self.dist_type in ['norm', 'normal']:
-                self.samples = np.random.normal(
-                    loc=self.dist_params[0],
-                    scale=self.dist_params[1],
-                    size=n_samples
-                )
-            elif self.dist_type == 't':
-                self.samples = stats.t.rvs(
-                    df=self.dist_params[0],
-                    loc=self.dist_params[1],
-                    scale=self.dist_params[2],
-                    size=n_samples
-                )
-            elif self.dist_type == 'lognormal':
-                self.samples = np.random.lognormal(
-                    mean=self.dist_params[0],
-                    sigma=self.dist_params[1],
-                    size=n_samples
-                )
-            elif self.dist_type == 'uniform':
-                self.samples = np.random.uniform(
-                    low=self.dist_params[0],
-                    high=self.dist_params[1],
-                    size=n_samples
-                )
-            elif self.dist_type == 'triangular':
-                self.samples = np.random.triangular(
-                    left=self.dist_params[0],
-                    mode=self.dist_params[1],
-                    right=self.dist_params[2],
-                    size=n_samples
-                )
-            elif self.dist_type == 'beta':
-                alpha, beta, min_val, max_val = self.dist_params
-                # 生成[0,1]的beta样本，然后缩放到[min_val, max_val]
-                beta_samples = np.random.beta(alpha, beta, size=n_samples)
-                self.samples = min_val + beta_samples * (max_val - min_val)
-            elif self.dist_type == 'gamma':
-                self.samples = np.random.gamma(
-                    shape=self.dist_params[0],
-                    scale=self.dist_params[1],
-                    size=n_samples
-                )
-            elif self.dist_type == 'exponential':
-                self.samples = np.random.exponential(
-                    scale=self.dist_params[0],
-                    size=n_samples
-                )
-            elif self.dist_type == 'weibull':
-                # NumPy的weibull分布参数与scipy不同，需要转换
-                shape, scale = self.dist_params
-                self.samples = scale * np.random.weibull(shape, size=n_samples)
-            return
-        
-        # 有限值约束时使用拒绝采样
-        # 1. 计算接受率
-        lower = self.min_value if self.min_value is not None else -np.inf
-        upper = self.max_value if self.max_value is not None else np.inf
-        
-        if self.dist_type == 'norm':
-            mean, std = self.dist_params[0], self.dist_params[1]
-            acceptance_rate = stats.norm.cdf(upper, mean, std) - stats.norm.cdf(lower, mean, std)
-        elif self.dist_type == 't':
-            df, loc, scale = self.dist_params
-            acceptance_rate = stats.t.cdf(upper, df, loc, scale) - stats.t.cdf(lower, df, loc, scale)
-        
-        acceptance_rate = max(acceptance_rate, 1e-10)
-        
-        # 2. 拒绝采样循环
-        valid_samples = []
-        attempts = 0
-        max_attempts = 50
-        
-        while len(valid_samples) < n_samples and attempts < max_attempts:
-            attempts += 1
-            remaining = n_samples - len(valid_samples)
-            
-            # 过采样
-            n_to_sample = int(remaining / acceptance_rate * 1.5)
-            n_to_sample = min(n_to_sample, n_samples * 5)
-            
-            # 生成样本
-            if self.dist_type == 'norm':
-                new_samples = np.random.normal(
-                    loc=self.dist_params[0],
-                    scale=self.dist_params[1],
-                    size=n_to_sample
-                )
-            elif self.dist_type == 't':
-                new_samples = stats.t.rvs(
-                    df=self.dist_params[0],
-                    loc=self.dist_params[1],
-                    scale=self.dist_params[2],
-                    size=n_to_sample
-                )
-            
-            # 过滤：只保留在限值范围内的样本
-            valid_mask = np.ones(len(new_samples), dtype=bool)
-            if self.min_value is not None:
-                valid_mask &= (new_samples >= self.min_value)
-            if self.max_value is not None:
-                valid_mask &= (new_samples <= self.max_value)
-            
-            valid_samples.append(new_samples[valid_mask])
-        
-        # 3. 合并并精确截取
-        if len(valid_samples) == 0:
-            raise ValueError(f"变量 '{self.name}' 无法生成有效样本")
-        
-        all_samples = np.concatenate(valid_samples)
-        
-        if len(all_samples) >= n_samples:
-            self.samples = all_samples[:n_samples]
+
+        # 获取分布对象
+        dist = self._get_distribution()
+
+        # 计算CDF范围
+        if self.min_value is not None or self.max_value is not None:
+            lower = self.min_value if self.min_value is not None else -np.inf
+            upper = self.max_value if self.max_value is not None else np.inf
+
+            # 计算对应的CDF值
+            cdf_lower = dist.cdf(lower)
+            cdf_upper = dist.cdf(upper)
+
+            # 在[cdf_lower, cdf_upper]范围内生成均匀分布
+            u = np.random.uniform(cdf_lower, cdf_upper, size=n_samples)
         else:
-            raise ValueError(
-                f"变量 '{self.name}' 只生成了 {len(all_samples)}/{n_samples} 个样本"
-            )
+            # 无限制时，在[0, 1]范围内生成均匀分布
+            u = np.random.uniform(0, 1, size=n_samples)
+
+        # 使用PPF（分位数函数）转换为目标分布
+        self.samples = dist.ppf(u)
+
+    def _get_distribution(self):
+        """获取scipy分布对象"""
+        if self.dist_type in ['norm', 'normal']:
+            return stats.norm(loc=self.dist_params[0], scale=self.dist_params[1])
+        elif self.dist_type == 't':
+            return stats.t(df=self.dist_params[0], loc=self.dist_params[1], scale=self.dist_params[2])
+        elif self.dist_type == 'lognormal':
+            return stats.lognorm(s=self.dist_params[1], scale=np.exp(self.dist_params[0]))
+        elif self.dist_type == 'uniform':
+            return stats.uniform(loc=self.dist_params[0], scale=self.dist_params[1]-self.dist_params[0])
+        elif self.dist_type == 'triangular':
+            c = (self.dist_params[1] - self.dist_params[0]) / (self.dist_params[2] - self.dist_params[0])
+            return stats.triang(c, loc=self.dist_params[0], scale=self.dist_params[2]-self.dist_params[0])
+        elif self.dist_type == 'beta':
+            alpha, beta, min_val, max_val = self.dist_params
+            return stats.beta(alpha, beta, loc=min_val, scale=max_val-min_val)
+        elif self.dist_type == 'gamma':
+            return stats.gamma(a=self.dist_params[0], scale=self.dist_params[1])
+        elif self.dist_type == 'exponential':
+            return stats.expon(scale=self.dist_params[0])
+        elif self.dist_type == 'weibull':
+            return stats.weibull_min(c=self.dist_params[0], scale=self.dist_params[1])
+        else:
+            raise ValueError(f"不支持的分布类型: {self.dist_type}")
     
     def plot_distribution(self, figsize=(12, 5), show_samples=True):
         """
@@ -737,22 +664,30 @@ class MonteCarloSimulator:
         """
         if self.result is None:
             raise ValueError("请先运行模拟")
-        
+
+        # 使用子集计算以提升性能（对于大样本，10000个样本足够准确）
+        sample_size = min(50000, len(self.result))
+        if sample_size < len(self.result):
+            indices = np.random.choice(len(self.result), size=sample_size, replace=False)
+            result_subset = self.result[indices]
+            var_samples_subset = {k: v[indices] for k, v in var_samples.items()}
+        else:
+            result_subset = self.result
+            var_samples_subset = var_samples
+
         sensitivities = {}
-        
-        for var_name, var_data in var_samples.items():
-            # 计算 Spearman 秩相关系数
-            corr, p_value = stats.spearmanr(var_data, self.result)
+        for var_name, var_data in var_samples_subset.items():
+            corr, p_value = stats.spearmanr(var_data, result_subset)
             sensitivities[var_name] = {
                 'correlation': float(corr),
                 'abs_correlation': float(abs(corr)),
                 'p_value': float(p_value)
             }
-        
+
         # 按绝对值排序
         self.sensitivity_results = dict(
-            sorted(sensitivities.items(), 
-                   key=lambda x: x[1]['abs_correlation'], 
+            sorted(sensitivities.items(),
+                   key=lambda x: x[1]['abs_correlation'],
                    reverse=True)
         )
     
@@ -946,11 +881,14 @@ class MonteCarloSimulator:
         
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])
-        ax1.hist(self.result, bins=100, density=True, alpha=0.6, 
+        ax1.hist(self.result, bins=50, density=True, alpha=0.6,
                 color='skyblue', edgecolor='black', label='Histogram')
-        
+
         from scipy.stats import gaussian_kde
-        kde = gaussian_kde(self.result)
+        # 使用子集计算KDE以提升性能
+        kde_sample_size = min(10000, len(self.result))
+        kde_sample = np.random.choice(self.result, size=kde_sample_size, replace=False)
+        kde = gaussian_kde(kde_sample)
         # 在裁剪后的范围内生成KDE曲线
         x_range = np.linspace(x_min_display, x_max_display, 200)
         ax1.plot(x_range, kde(x_range), 'r-', lw=2, label='KDE')
