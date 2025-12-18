@@ -427,30 +427,40 @@ class Variable:
             pdf = np.ones_like(x_range) * 0.01
             ax.plot(x_range, pdf, 'r-', lw=2.5, label=f'{self.dist_type} Distribution', zorder=3)
         
+        # 计算 PDF 的最大值，用于统一 y 轴范围
+        max_pdf = np.max(pdf)
+
         # 如果有Monte Carlo样本且需要显示
         has_samples = self.samples is not None and show_samples
+        hist_max = max_pdf  # 初始化为 PDF 最大值
+
         if has_samples:
-            ax.hist(self.samples, bins=100, density=True, alpha=0.3, 
-                   label='Monte Carlo Samples', color='green', edgecolor='darkgreen', 
+            counts, bins, patches = ax.hist(self.samples, bins=100, density=True, alpha=0.3,
+                   label='Monte Carlo Samples', color='green', edgecolor='darkgreen',
                    linewidth=0.5, zorder=1)
-        
+            hist_max = max(hist_max, np.max(counts))
+
         # 显示原始数据
         if self.input_mode == 'data':
             if len(self.raw_data) <= 30:
                 # 小样本：使用散点图
-                max_pdf = np.max(pdf)
                 y_base = 0
                 y_jitter = np.random.normal(0, 0.005 * max_pdf, len(self.raw_data))
                 y_positions = y_base + y_jitter
-                ax.scatter(self.raw_data, y_positions, alpha=0.5, s=60, 
+                ax.scatter(self.raw_data, y_positions, alpha=0.5, s=60,
                            label='Raw Data', color='steelblue', zorder=5)
                 ax.set_ylim(y_base - 0.05 * max_pdf, max_pdf * 1.1)
                 ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5, zorder=2)
             else:
                 # 大样本：使用直方图
-                ax.hist(self.raw_data, bins=min(30, len(self.raw_data)//3), 
-                       density=True, alpha=0.5, label='Raw Data', 
+                counts, bins, patches = ax.hist(self.raw_data, bins=min(30, len(self.raw_data)//3),
+                       density=True, alpha=0.5, label='Raw Data',
                        color='steelblue', edgecolor='darkblue', zorder=2)
+                hist_max = max(hist_max, np.max(counts))
+
+        # 统一设置 y 轴范围（仅当有直方图时）
+        if (has_samples or (self.input_mode == 'data' and len(self.raw_data) > 30)):
+            ax.set_ylim(0, hist_max * 1.1)
         
         ax.set_xlabel('Value', fontsize=12)
         ax.set_ylabel('Probability Density', fontsize=12)
