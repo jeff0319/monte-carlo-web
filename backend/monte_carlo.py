@@ -242,13 +242,23 @@ class Variable:
         else:
             raise ValueError(f"不支持的分布类型: {dist_type}")
     
-    def monte_carlo_sample(self, n_samples: int = 1000000):
+    def monte_carlo_sample(self, n_samples: int = 1000000, random_seed: int = 4545):
         """
         进行Monte Carlo抽样，支持限值约束
         使用逆向CDF方法（Inverse Transform Sampling）统一处理所有分布
+        
+        Parameters:
+        -----------
+        n_samples : int
+            采样数量
+        random_seed : int
+            随机数种子，默认4545，用于确保结果可重现
         """
         if self.dist_params is None:
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
+
+        # 设置随机数种子
+        np.random.seed(random_seed)
 
         # 获取分布对象
         dist = self._get_distribution()
