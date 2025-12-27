@@ -499,7 +499,7 @@ class MonteCarloSimulator:
         self.result = None
         self.result_name = 'Result'
         self.formula_str = None
-        self.confidence_levels = [0.95, 0.99]  # 默认置信水平
+        self.confidence_levels = [0.90, 0.95, 0.99]  # 默认置信水平
         self.sensitivity_results = None
         self.cdf_fit_result = None
         self.cdf_inverse_fit_result = None  # 新增：反向CDF拟合
@@ -861,7 +861,7 @@ class MonteCarloSimulator:
         
         return analysis
     
-    def plot_result(self, figsize=(15, 10), trim_percentile=0.1):
+    def plot_result(self, figsize=(15, 10), trim_percentile=0.05):
         """
         绘制结果的多种统计图,返回base64编码的图片
         
@@ -870,7 +870,7 @@ class MonteCarloSimulator:
         figsize : tuple
             图形大小
         trim_percentile : float
-            裁剪极端尾部的百分位数阈值（默认0.5%，即裁剪两端各0.5%的极端值）
+            裁剪极端尾部的百分位数阈值（默认0.1，即裁剪两端各0.1%的极端值）
             设置为0则不裁剪，显示全部数据范围
         """
         if self.result is None:
@@ -885,35 +885,39 @@ class MonteCarloSimulator:
         
         # 智能确定显示范围：裁剪极端尾部以聚焦主要分布
         if trim_percentile > 0:
-            # 使用分位数裁剪极端值
             lower_bound = np.percentile(self.result, trim_percentile)
             upper_bound = np.percentile(self.result, 100 - trim_percentile)
             
-            # 添加一些边距使图形更美观
             data_range = upper_bound - lower_bound
-            margin = data_range * 0.05  # 5%的边距
+            margin = data_range * 0.05
             x_min_display = lower_bound - margin
             x_max_display = upper_bound + margin
+
+            data_in_range = self.result[(self.result >= x_min_display) & (self.result <= x_max_display)]
         else:
-            # 不裁剪，显示全部范围
             x_min_display = self.result.min()
             x_max_display = self.result.max()
+            data_in_range = self.result
+
+        # 简化的智能bins策略（3档分级）
+        n_data_in_range = len(data_in_range)
+        if n_data_in_range < 1000:
+            n_bins = 50
+        elif n_data_in_range < 50000:
+            n_bins = 100
+        else:
+            n_bins = 150
         
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])
-        ax1.hist(self.result, bins=50, density=True, alpha=0.6,
+        ax1.hist(self.result, bins=n_bins, density=True, alpha=0.6,
                 color='skyblue', edgecolor='black', label='Histogram')
 
         from scipy.stats import gaussian_kde
-        # 使用子集计算KDE以提升性能
-        kde_sample_size = min(10000, len(self.result))
-        kde_sample = np.random.choice(self.result, size=kde_sample_size, replace=False)
-        kde = gaussian_kde(kde_sample)
-        # 在裁剪后的范围内生成KDE曲线
+        kde = gaussian_kde(self.result)
         x_range = np.linspace(x_min_display, x_max_display, 200)
         ax1.plot(x_range, kde(x_range), 'r-', lw=2, label='KDE')
         
-        # 设置x轴显示范围
         ax1.set_xlim(x_min_display, x_max_display)
         
         ax1.axvline(x=median_val, color='darkred', linestyle='-', 
@@ -984,8 +988,6 @@ class MonteCarloSimulator:
         ax3.legend(fontsize=11, loc='lower right')
         ax3.grid(True, alpha=0.3)
         ax3.set_ylim(-0.05, 1.05)
-        
-        # 设置 CDF 的 x 轴范围与 distribution 图一致
         ax3.set_xlim(x_min_display, x_max_display)
         
         # 转换为base64
