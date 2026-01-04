@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     environment:
       - FLASK_ENV=production
+      - ALLOW_CUSTOM_CODE=1
     volumes:
       - ./backend:/app/backend
       - ./frontend:/app/frontend

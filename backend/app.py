@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify, send_from_directory, session, send_file
 from flask_cors import CORS
 from monte_carlo import MonteCarloSimulator
+import ast
 import json
+import os
 import traceback
 import numpy as np
 import secrets
@@ -20,6 +22,86 @@ app.secret_key = secrets.token_hex(32)
 # 存储每个用户的模拟器实例
 user_simulators = {}
 user_last_access = {}
+
+# 控制自定义代码执行（默认禁止，需设置 ALLOW_CUSTOM_CODE=1 才启用）
+ALLOW_CUSTOM_CODE = os.getenv("ALLOW_CUSTOM_CODE", "0") == "1"
+ALLOWED_FUNCTIONS = {
+    'np': np,
+    'sin': np.sin,
+    'cos': np.cos,
+    'tan': np.tan,
+    'exp': np.exp,
+    'log': np.log,
+    'log10': np.log10,
+    'ln': np.log,
+    'sqrt': np.sqrt,
+    'abs': np.abs,
+    'pow': np.power,
+}
+ALLOWED_NODES = {
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call,
+    ast.Name, ast.Load, ast.Constant, ast.Attribute,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod, ast.USub, ast.UAdd,
+    ast.And, ast.Or, ast.Eq, ast.NotEq, ast.Gt, ast.GtE, ast.Lt, ast.LtE, ast.IfExp
+}
+
+
+class FormulaValidator(ast.NodeVisitor):
+    """简单AST白名单验证，防止公式注入"""
+
+    def __init__(self, allowed_names):
+        self.allowed_names = allowed_names
+
+    def generic_visit(self, node):
+        if type(node) not in ALLOWED_NODES:
+            raise ValueError(f"公式包含不支持的语法: {type(node).__name__}")
+        super().generic_visit(node)
+
+    def visit_Attribute(self, node):
+        if not (isinstance(node.value, ast.Name) and node.value.id == 'np' and node.attr in ALLOWED_FUNCTIONS):
+            raise ValueError("仅允许 np.<math_func> 形式的数学函数调用")
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node):
+        raise ValueError("不允许使用下标或切片")
+
+    def visit_Lambda(self, node):
+        raise ValueError("不允许定义Lambda表达式")
+
+    def visit_Name(self, node):
+        if node.id not in self.allowed_names:
+            raise ValueError(f"公式包含未声明的变量或函数: {node.id}")
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        func_node = node.func
+        if isinstance(func_node, ast.Name):
+            func_name = func_node.id
+        elif isinstance(func_node, ast.Attribute) and isinstance(func_node.value, ast.Name):
+            func_name = func_node.attr if func_node.value.id == 'np' else None
+        else:
+            func_name = None
+
+        if func_name not in ALLOWED_FUNCTIONS:
+            raise ValueError("仅允许使用内置的数学函数")
+        self.generic_visit(node)
+
+
+def build_formula_lambda(formula_str, var_names):
+    """将用户公式构建为安全的lambda"""
+    if not formula_str or not formula_str.strip():
+        raise ValueError("公式不能为空")
+
+    allowed_names = set(var_names) | set(ALLOWED_FUNCTIONS.keys())
+    tree = ast.parse(formula_str, mode='eval')
+    FormulaValidator(allowed_names).visit(tree)
+    code = compile(tree, '<formula>', 'eval')
+
+    def _formula(vars):
+        local_vars = {name: vars[name] for name in var_names}
+        return eval(code, {"__builtins__": {}, **ALLOWED_FUNCTIONS}, local_vars)
+
+    return _formula
 
 def get_user_simulator():
     """获取当前用户的模拟器实例"""
@@ -221,30 +303,21 @@ def run_simulation():
         data = request.json
         formula_str = data.get('formula')  # 例如: "var_A + var_B * var_C"
         result_name = data.get('result_name', 'Result')
-        n_samples = data.get('n_samples', 1000000)
+        n_samples = data.get('n_samples', 100000)
         cdf_fit_degree = data.get('cdf_fit_degree', 5)  # CDF拟合次数
         use_custom_function = data.get('use_custom_function', False)
         custom_function_code = data.get('custom_function_code', '')
+        random_seed = data.get('random_seed', 4545)
         
         # 创建函数
         var_names = list(simulator.variables.keys())
         
         if use_custom_function and custom_function_code:
+            if not ALLOW_CUSTOM_CODE:
+                return jsonify({'error': '自定义代码执行已禁用，请设置环境变量 ALLOW_CUSTOM_CODE=1 启用（仅限受信环境）'}), 403
             # 使用自定义 Python 函数
             # 创建一个安全的命名空间
-            safe_namespace = {
-                'np': np,
-                'sin': np.sin,
-                'cos': np.cos,
-                'tan': np.tan,
-                'exp': np.exp,
-                'log': np.log,
-                'log10': np.log10,
-                'ln': np.log,  # ln 是自然对数的别名
-                'sqrt': np.sqrt,
-                'abs': np.abs,
-                'pow': np.power,
-            }
+            safe_namespace = {**ALLOWED_FUNCTIONS}
             
             # 执行自定义函数代码
             exec(custom_function_code, safe_namespace)
@@ -255,28 +328,11 @@ def run_simulation():
             
             formula_func = safe_namespace['custom_formula']
         else:
-            # 使用简单公式
-            formula_code = formula_str
-            
-            # 支持的数学函数
-            formula_code = formula_code.replace('sin(', 'np.sin(')
-            formula_code = formula_code.replace('cos(', 'np.cos(')
-            formula_code = formula_code.replace('tan(', 'np.tan(')
-            formula_code = formula_code.replace('exp(', 'np.exp(')
-            formula_code = formula_code.replace('log(', 'np.log(')
-            formula_code = formula_code.replace('log10(', 'np.log10(')
-            formula_code = formula_code.replace('ln(', 'np.log(')
-            formula_code = formula_code.replace('sqrt(', 'np.sqrt(')
-            
-            # 将变量名转换为字典访问形式
-            for var_name in var_names:
-                formula_code = formula_code.replace(var_name, f"vars['{var_name}']")
-            
-            # 创建lambda函数
-            formula_func = eval(f"lambda vars: {formula_code}", {'np': np})
+            # 使用经过AST校验的安全公式
+            formula_func = build_formula_lambda(formula_str, var_names)
         
         # 运行模拟（包含CDF拟合）
-        simulator.run_simulation(formula_func, result_name, n_samples, formula_str, cdf_fit_degree)
+        simulator.run_simulation(formula_func, result_name, n_samples, formula_str, cdf_fit_degree, random_seed)
         
         return jsonify({
             'success': True,

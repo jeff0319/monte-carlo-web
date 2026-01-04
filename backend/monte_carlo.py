@@ -91,77 +91,45 @@ class Variable:
     
     def _parse_params(self, dist_type: str, params: dict):
         """解析分布参数"""
-        if dist_type in ['norm', 'normal']:
-            mean = params.get('mean')
-            std = params.get('std')
-            if mean is None or std is None:
-                raise ValueError("正态分布需要 mean 和 std 参数")
-            self.dist_params = (mean, std)
-            
-        elif dist_type == 't':
-            mean = params.get('mean')
-            std = params.get('std')
-            df = params.get('df')
-            if mean is None or std is None or df is None:
-                raise ValueError("t分布需要 mean, std 和 df 参数")
-            self.dist_params = (df, mean, std)
-            
-        elif dist_type == 'lognormal':
-            mean = params.get('mean')
-            std = params.get('std')
-            if mean is None or std is None:
-                raise ValueError("对数正态分布需要 mean 和 std 参数")
-            self.dist_params = (mean, std)
-            
-        elif dist_type == 'uniform':
-            min_val = params.get('min')
-            max_val = params.get('max')
-            if min_val is None or max_val is None:
-                raise ValueError("均匀分布需要 min 和 max 参数")
-            self.dist_params = (min_val, max_val)
-            
-        elif dist_type == 'triangular':
-            min_val = params.get('min')
-            mode = params.get('mode')
-            max_val = params.get('max')
-            if min_val is None or mode is None or max_val is None:
-                raise ValueError("三角分布需要 min, mode 和 max 参数")
-            self.dist_params = (min_val, mode, max_val)
-            
-        elif dist_type == 'beta':
-            alpha = params.get('alpha')
-            beta = params.get('beta')
-            min_val = params.get('min', 0)
-            max_val = params.get('max', 1)
-            if alpha is None or beta is None:
-                raise ValueError("Beta分布需要 alpha 和 beta 参数")
-            self.dist_params = (alpha, beta, min_val, max_val)
-            
-        elif dist_type == 'gamma':
-            shape = params.get('shape')
-            scale = params.get('scale')
-            if shape is None or scale is None:
-                raise ValueError("Gamma分布需要 shape 和 scale 参数")
-            self.dist_params = (shape, scale)
-            
-        elif dist_type == 'exponential':
+
+        def require(keys, err_msg):
+            missing = [k for k in keys if params.get(k) is None]
+            if missing:
+                raise ValueError(err_msg)
+            return [params[k] for k in keys]
+
+        def exponential_parser():
             scale = params.get('scale')
             rate = params.get('rate')
             if scale is None and rate is None:
                 raise ValueError("指数分布需要 scale 或 rate 参数")
-            if rate is not None:
+            if scale is None:
                 scale = 1.0 / rate
-            self.dist_params = (scale,)
-            
-        elif dist_type == 'weibull':
-            shape = params.get('shape')
-            scale = params.get('scale')
-            if shape is None or scale is None:
-                raise ValueError("Weibull分布需要 shape 和 scale 参数")
-            self.dist_params = (shape, scale)
-            
-        else:
+            return (scale,)
+
+        dist_key = 'norm' if dist_type == 'normal' else dist_type
+
+        parsers = {
+            'norm': lambda: tuple(require(['mean', 'std'], "正态分布需要 mean 和 std 参数")),
+            't': lambda: tuple(require(['df', 'mean', 'std'], "t分布需要 mean, std 和 df 参数")),
+            'lognormal': lambda: tuple(require(['mean', 'std'], "对数正态分布需要 mean 和 std 参数")),
+            'uniform': lambda: tuple(require(['min', 'max'], "均匀分布需要 min 和 max 参数")),
+            'triangular': lambda: tuple(require(['min', 'mode', 'max'], "三角分布需要 min, mode 和 max 参数")),
+            'beta': lambda: (
+                require(['alpha', 'beta'], "Beta分布需要 alpha 和 beta 参数")[0],
+                params['beta'],
+                params.get('min', 0),
+                params.get('max', 1)
+            ),
+            'gamma': lambda: tuple(require(['shape', 'scale'], "Gamma分布需要 shape 和 scale 参数")),
+            'exponential': exponential_parser,
+            'weibull': lambda: tuple(require(['shape', 'scale'], "Weibull分布需要 shape 和 scale 参数")),
+        }
+
+        if dist_key not in parsers:
             raise ValueError(f"不支持的分布类型: {dist_type}")
+
+        self.dist_params = parsers[dist_key]()
         
     def fit_distribution(self, dist_type: str = 'norm'):
         """
@@ -242,7 +210,8 @@ class Variable:
         else:
             raise ValueError(f"不支持的分布类型: {dist_type}")
     
-    def monte_carlo_sample(self, n_samples: int = 1000000, random_seed: int = 4545):
+    def monte_carlo_sample(self, n_samples: int = 100000, random_seed: Optional[int] = None,
+                           rng: Optional[np.random.Generator] = None):
         """
         进行Monte Carlo抽样，支持限值约束
         使用逆向CDF方法（Inverse Transform Sampling）统一处理所有分布
@@ -251,14 +220,17 @@ class Variable:
         -----------
         n_samples : int
             采样数量
-        random_seed : int
-            随机数种子，默认4545，用于确保结果可重现
+        random_seed : int, optional
+            随机数种子，默认None。仅当未传入rng时使用，用于确保结果可重现。
+        rng : np.random.Generator, optional
+            可选的随机数生成器。传入后优先使用，不再设置/修改全局随机种子。
         """
         if self.dist_params is None:
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
 
-        # 设置随机数种子
-        np.random.seed(random_seed)
+        # 生成随机数生成器（优先使用传入的 rng）
+        if rng is None:
+            rng = np.random.default_rng(random_seed)
 
         # 获取分布对象
         dist = self._get_distribution()
@@ -273,10 +245,10 @@ class Variable:
             cdf_upper = dist.cdf(upper)
 
             # 在[cdf_lower, cdf_upper]范围内生成均匀分布
-            u = np.random.uniform(cdf_lower, cdf_upper, size=n_samples)
+            u = rng.uniform(cdf_lower, cdf_upper, size=n_samples)
         else:
             # 无限制时，在[0, 1]范围内生成均匀分布
-            u = np.random.uniform(0, 1, size=n_samples)
+            u = rng.uniform(0, 1, size=n_samples)
 
         # 使用PPF（分位数函数）转换为目标分布
         self.samples = dist.ppf(u)
@@ -314,13 +286,26 @@ class Variable:
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
         
         fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+        # 控制绘图用的数据量，避免超大样本导致内存/性能问题
+        max_plot_samples = 200000
+        sample_rng = np.random.default_rng(0)
+        samples_for_plot = None
+        if self.samples is not None:
+            if len(self.samples) > max_plot_samples:
+                idx = sample_rng.choice(len(self.samples), size=max_plot_samples, replace=False)
+                samples_for_plot = self.samples[idx]
+            else:
+                samples_for_plot = self.samples
         
         # 确定x轴范围 - 根据分布类型和是否有样本数据智能确定
-        if self.samples is not None:
+        plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
+
+        if plot_samples is not None:
             # 如果已经有样本，使用样本的范围
-            sample_min = np.min(self.samples)
-            sample_max = np.max(self.samples)
-            sample_std = np.std(self.samples)
+            sample_min = np.min(plot_samples)
+            sample_max = np.max(plot_samples)
+            sample_std = np.std(plot_samples)
             x_min = sample_min - 0.5 * sample_std
             x_max = sample_max + 0.5 * sample_std
         elif self.input_mode == 'data':
@@ -441,11 +426,11 @@ class Variable:
         max_pdf = np.max(pdf)
 
         # 如果有Monte Carlo样本且需要显示
-        has_samples = self.samples is not None and show_samples
+        has_samples = plot_samples is not None and show_samples
         hist_max = max_pdf  # 初始化为 PDF 最大值
 
         if has_samples:
-            counts, bins, patches = ax.hist(self.samples, bins=100, density=True, alpha=0.3,
+            counts, bins, patches = ax.hist(plot_samples, bins=100, density=True, alpha=0.3,
                    label='Monte Carlo Samples', color='green', edgecolor='darkgreen',
                    linewidth=0.5, zorder=1)
             hist_max = max(hist_max, np.max(counts))
@@ -463,7 +448,13 @@ class Variable:
                 ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5, zorder=2)
             else:
                 # 大样本：使用直方图
-                counts, bins, patches = ax.hist(self.raw_data, bins=min(30, len(self.raw_data)//3),
+                if len(self.raw_data) > max_plot_samples:
+                    raw_idx = sample_rng.choice(len(self.raw_data), size=max_plot_samples, replace=False)
+                    raw_data_for_plot = self.raw_data[raw_idx]
+                else:
+                    raw_data_for_plot = self.raw_data
+
+                counts, bins, patches = ax.hist(raw_data_for_plot, bins=min(30, len(raw_data_for_plot)//3),
                        density=True, alpha=0.5, label='Raw Data',
                        color='steelblue', edgecolor='darkblue', zorder=2)
                 hist_max = max(hist_max, np.max(counts))
@@ -624,8 +615,8 @@ class MonteCarloSimulator:
                 raise ValueError(f"变量 {name} 的 input_mode 必须是 'data' 或 'params'")
     
     def run_simulation(self, formula: Callable, result_name: str = 'Result', 
-                      n_samples: int = 1000000, formula_str: str = None,
-                      cdf_fit_degree: int = 5):
+                      n_samples: int = 100000, formula_str: str = None,
+                      cdf_fit_degree: int = 5, random_seed: int = 4545):
         """
         运行Monte Carlo模拟
         """
@@ -635,11 +626,14 @@ class MonteCarloSimulator:
         self.result_name = result_name
         self.formula_str = formula_str
         self.cdf_fit_degree = cdf_fit_degree
+
+        # 使用单个生成器保证重现性且避免变量间的相关性
+        rng = np.random.default_rng(random_seed)
         
         # 对所有变量进行Monte Carlo抽样
         var_samples = {}
         for name, var in self.variables.items():
-            var.monte_carlo_sample(n_samples)
+            var.monte_carlo_sample(n_samples, rng=rng)
             var_samples[name] = var.samples
         
         # 保存变量样本
@@ -882,6 +876,15 @@ class MonteCarloSimulator:
         mean_val = np.mean(self.result)
         median_val = np.median(self.result)
         std_val = np.std(self.result)
+
+        # 绘图数据下采样，避免1e6级别样本耗尽内存
+        max_plot_samples = 200000
+        plot_rng = np.random.default_rng(0)
+        if len(self.result) > max_plot_samples:
+            plot_indices = plot_rng.choice(len(self.result), size=max_plot_samples, replace=False)
+            result_for_plot = self.result[plot_indices]
+        else:
+            result_for_plot = self.result
         
         # 智能确定显示范围：裁剪极端尾部以聚焦主要分布
         if trim_percentile > 0:
@@ -893,11 +896,11 @@ class MonteCarloSimulator:
             x_min_display = lower_bound - margin
             x_max_display = upper_bound + margin
 
-            data_in_range = self.result[(self.result >= x_min_display) & (self.result <= x_max_display)]
+            data_in_range = result_for_plot[(result_for_plot >= x_min_display) & (result_for_plot <= x_max_display)]
         else:
             x_min_display = self.result.min()
             x_max_display = self.result.max()
-            data_in_range = self.result
+            data_in_range = result_for_plot
 
         # 简化的智能bins策略（3档分级）
         n_data_in_range = len(data_in_range)
@@ -910,11 +913,11 @@ class MonteCarloSimulator:
         
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])
-        ax1.hist(self.result, bins=n_bins, density=True, alpha=0.6,
+        ax1.hist(result_for_plot, bins=n_bins, density=True, alpha=0.6,
                 color='skyblue', edgecolor='black', label='Histogram')
 
         from scipy.stats import gaussian_kde
-        kde = gaussian_kde(self.result)
+        kde = gaussian_kde(result_for_plot)
         x_range = np.linspace(x_min_display, x_max_display, 200)
         ax1.plot(x_range, kde(x_range), 'r-', lw=2, label='KDE')
         
@@ -1194,7 +1197,7 @@ class MonteCarloSimulator:
         
         return "\n".join(report_lines)
     
-    def export_to_csv(self):
+    def export_to_csv(self, max_samples: int = 100000):
         """
         导出数据为CSV格式（包含metadata和采样数据）
         """
@@ -1209,6 +1212,7 @@ class MonteCarloSimulator:
         lines.append(f"# Formula: {self.formula_str if self.formula_str else 'N/A'}")
         lines.append(f"# Result_Name: {self.result_name}")
         lines.append(f"# Number_of_Samples: {len(self.result)}")
+        lines.append(f"# Sample_Limit: {max_samples}")
         lines.append("#")
         
         # 变量配置 - 表格化格式
@@ -1339,7 +1343,15 @@ class MonteCarloSimulator:
         # else:
         #     indices = range(len(self.result))
         
-        indices = range(len(self.result))
+        total_rows = len(self.result)
+        sample_count = min(total_rows, max_samples)
+        if total_rows > sample_count:
+            rng = np.random.default_rng(0)
+            indices = rng.choice(total_rows, size=sample_count, replace=False)
+            lines.append(f"# Note: downsampled to {sample_count} rows from {total_rows}")
+        else:
+            indices = np.arange(total_rows)
+
         for i in indices:
             row = [f"{self.result[i]:.15e}"]
             for var_name in self.variables.keys():
@@ -1352,7 +1364,7 @@ class MonteCarloSimulator:
         
         return '\n'.join(lines)
     
-    def export_to_json(self, include_samples=True):
+    def export_to_json(self, include_samples=True, max_samples: int = 50000):
         """
         导出数据为JSON格式
         """
@@ -1465,11 +1477,25 @@ class MonteCarloSimulator:
         
         # 采样数据（可选）
         if include_samples:
+            total_rows = len(self.result)
+            sample_count = min(total_rows, max_samples)
+            if total_rows > sample_count:
+                rng = np.random.default_rng(0)
+                indices = rng.choice(total_rows, size=sample_count, replace=False)
+            else:
+                indices = np.arange(total_rows)
+
             data['samples'] = {
-                f'{self.result_name}': self.result.tolist()
+                f'{self.result_name}': self.result[indices].tolist(),
+                '_meta': {
+                    'sampled': total_rows > sample_count,
+                    'sample_count': int(sample_count),
+                    'total_rows': int(total_rows),
+                    'max_samples': int(max_samples)
+                }
             }
             for var_name in self.variables.keys():
-                data['samples'][var_name] = self.var_samples[var_name].tolist()
+                data['samples'][var_name] = self.var_samples[var_name][indices].tolist()
         
         return json.dumps(data, indent=2, ensure_ascii=False)
     
