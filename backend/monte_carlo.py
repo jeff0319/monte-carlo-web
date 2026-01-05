@@ -442,9 +442,13 @@ class Variable:
                 y_base = 0
                 y_jitter = np.random.normal(0, 0.005 * max_pdf, len(self.raw_data))
                 y_positions = y_base + y_jitter
+                pad = 0.15 * max_pdf
+                y_min = min(y_positions) - pad  # 给散点直径留空间
+                y_min = min(y_min, -0.2 * max_pdf)  # 保证有负向留白
                 ax.scatter(self.raw_data, y_positions, alpha=0.5, s=60,
-                           label='Raw Data', color='steelblue', zorder=5)
-                ax.set_ylim(y_base - 0.05 * max_pdf, max_pdf * 1.1)
+                           label='Raw Data', color='steelblue', zorder=5,
+                           clip_on=False)
+                ax.set_ylim(y_min, max_pdf * 1.1)
                 ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5, zorder=2)
             else:
                 # 大样本：使用直方图
@@ -1183,6 +1187,18 @@ class MonteCarloSimulator:
                 report_lines.append(f"  Parameters: df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}")
             if var.min_value is not None or var.max_value is not None:
                 report_lines.append(f"  Limits: [{var.min_value if var.min_value is not None else '-∞'}, {var.max_value if var.max_value is not None else '+∞'}]")
+            if var.input_mode == 'data' and var.raw_data is not None:
+                raw_vals = var.raw_data
+                report_lines.append(f"  Raw Data Count: {len(raw_vals)}")
+                report_lines.append(
+                    f"  Raw Data Stats: min={np.min(raw_vals):.6f}, max={np.max(raw_vals):.6f}, "
+                    f"mean={np.mean(raw_vals):.6f}, std={np.std(raw_vals, ddof=1):.6f}"
+                )
+                max_show = 30
+                shown_vals = ", ".join(f"{v:.4f}" for v in raw_vals[:max_show])
+                if len(raw_vals) > max_show:
+                    shown_vals += ", ..."
+                report_lines.append(f"  Raw Data Values: {shown_vals}")
             report_lines.append("")
         
         # 公式

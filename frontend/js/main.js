@@ -61,17 +61,19 @@
                 showLocalStatus('addVariableStatus', 'Please enter JSON variable definition', 'error', false);
                 showStatus('Please enter JSON variable definition', 'error');
                 return;
-            }
+        }
 
-            // Show loading state
-            showLocalStatus('addVariableStatus', 'Adding variables...', 'info', true);
-            showStatus('Adding variables...', 'info');
+        // Show loading state
+        showLocalStatus('addVariableStatus', 'Adding variables...', 'info', true);
+        showStatus('Adding variables...', 'info');
 
-            fetch('/api/add_variables_json', {
+        // 先重置后再添加，避免叠加旧变量
+        fetch('/api/reset', { method: 'POST' })
+            .then(() => fetch('/api/add_variables_json', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ variables: jsonInput })
-            })
+            }))
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
@@ -87,7 +89,7 @@
                 showLocalStatus('addVariableStatus', '❌ Request failed: ' + error.message, 'error', false);
                 showStatus('Request failed: ' + error.message, 'error');
             });
-        }
+    }
 
         function updateVariableList(variables) {
             const listDiv = document.getElementById('variableList');
