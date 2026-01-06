@@ -297,17 +297,47 @@ class Variable:
                 samples_for_plot = self.samples[idx]
             else:
                 samples_for_plot = self.samples
+
+        def _smart_bins(data, xmin=None, xmax=None):
+            """
+            基于展示范围的数据自适应 bins：
+            - 先用落在 [xmin, xmax] 的子集（如果提供范围）
+            - 基于相对范围（range/median）分档，避免绝对 0~1 假设
+            """
+            data = np.asarray(data)
+            if xmin is not None and xmax is not None:
+                in_range = data[(data >= xmin) & (data <= xmax)]
+                if len(in_range) > 0:
+                    data = in_range
+            if len(data) == 0:
+                return 30
+            data_range = data.max() - data.min()
+            if data_range == 0:
+                return 30
+
+            # 使用相对范围（range/median）分档，避免绑定在 0~1 区间
+            median_abs = max(abs(np.median(data)), 1e-8)
+            rel_range = data_range / median_abs
+            if rel_range < 0.05:
+                return 180
+            if rel_range < 0.15:
+                return 140
+            if rel_range < 0.3:
+                return 120
+
+            bins = int(np.sqrt(len(data)))
+            return int(np.clip(bins, 60, 120))
         
         # 确定x轴范围 - 根据分布类型和是否有样本数据智能确定
         plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
 
         if plot_samples is not None:
-            # 如果已经有样本，使用样本的范围
-            sample_min = np.min(plot_samples)
-            sample_max = np.max(plot_samples)
-            sample_std = np.std(plot_samples)
-            x_min = sample_min - 0.5 * sample_std
-            x_max = sample_max + 0.5 * sample_std
+            # 如果已经有样本，使用分位数范围，避免极端尾部拉宽视图
+            q_low, q_high = np.percentile(plot_samples, [0.1, 99.9])
+            width = q_high - q_low if q_high > q_low else 1
+            padding = 0.2 * width
+            x_min = q_low - padding
+            x_max = q_high + padding
         elif self.input_mode == 'data':
             # 使用原始数据的范围
             x_min = self.raw_data.min() - 0.5 * self.raw_data.std()
@@ -430,7 +460,7 @@ class Variable:
         hist_max = max_pdf  # 初始化为 PDF 最大值
 
         if has_samples:
-            counts, bins, patches = ax.hist(plot_samples, bins=100, density=True, alpha=0.3,
+            counts, bins, patches = ax.hist(plot_samples, bins=_smart_bins(plot_samples, x_min, x_max), density=True, alpha=0.3,
                    label='Monte Carlo Samples', color='green', edgecolor='darkgreen',
                    linewidth=0.5, zorder=1)
             hist_max = max(hist_max, np.max(counts))
@@ -458,7 +488,8 @@ class Variable:
                 else:
                     raw_data_for_plot = self.raw_data
 
-                counts, bins, patches = ax.hist(raw_data_for_plot, bins=min(30, len(raw_data_for_plot)//3),
+                counts, bins, patches = ax.hist(raw_data_for_plot,
+                       bins=_smart_bins(raw_data_for_plot, x_min, x_max),
                        density=True, alpha=0.5, label='Raw Data',
                        color='steelblue', edgecolor='darkblue', zorder=2)
                 hist_max = max(hist_max, np.max(counts))
@@ -466,6 +497,9 @@ class Variable:
         # 统一设置 y 轴范围（仅当有直方图时）
         if (has_samples or (self.input_mode == 'data' and len(self.raw_data) > 30)):
             ax.set_ylim(0, hist_max * 1.1)
+
+        # 固定 x 轴范围以避免极端尾部导致自动缩放异常
+        ax.set_xlim(x_min, x_max)
         
         ax.set_xlabel('Value', fontsize=12)
         ax.set_ylabel('Probability Density', fontsize=12)
@@ -907,13 +941,28 @@ class MonteCarloSimulator:
             data_in_range = result_for_plot
 
         # 简化的智能bins策略（3档分级）
-        n_data_in_range = len(data_in_range)
-        if n_data_in_range < 1000:
-            n_bins = 50
-        elif n_data_in_range < 50000:
-            n_bins = 100
-        else:
-            n_bins = 150
+        def _smart_bins(data, xmin=None, xmax=None):
+            data = np.asarray(data)
+            if xmin is not None and xmax is not None:
+                data = data[(data >= xmin) & (data <= xmax)]
+            if len(data) == 0:
+                return 50
+            data_range = data.max() - data.min()
+            iqr = np.subtract(*np.percentile(data, [75, 25])) if len(data) > 1 else 0
+            if data_range == 0:
+                return 50
+            if iqr == 0:
+                iqr = data_range / 2
+            bin_width = 2 * iqr * (len(data) ** (-1/3))
+            if bin_width <= 0:
+                return 50
+            bins = int(np.ceil(data_range / bin_width))
+            # 结果分布用更稳的范围
+            if data_range <= 0.2 * abs(np.mean(data)) if np.mean(data) != 0 else data_range:
+                return int(np.clip(bins, 40, 150))
+            return int(np.clip(bins, 40, 120))
+
+        n_bins = _smart_bins(data_in_range, x_min_display, x_max_display)
         
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])

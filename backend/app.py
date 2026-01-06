@@ -123,6 +123,7 @@ def get_user_simulator():
     
     return user_simulators[user_id]
 
+
 def cleanup_inactive_users():
     """清理超过1小时未活动的用户"""
     now = datetime.now()
@@ -584,7 +585,8 @@ def download_full_zip():
             # 图表 PNG 文件
             if 'result_plot' in simulator.chart_cache:
                 img_bytes = base64.b64decode(simulator.chart_cache['result_plot'])
-                zf.writestr('charts/result_distribution.png', img_bytes)
+                result_name = simulator.result_name or 'result'
+                zf.writestr(f'charts/{result_name}_distribution.png', img_bytes)
             
             if 'pareto' in simulator.chart_cache:
                 img_bytes = base64.b64decode(simulator.chart_cache['pareto'])
