@@ -278,7 +278,7 @@ class Variable:
         else:
             raise ValueError(f"不支持的分布类型: {self.dist_type}")
     
-    def plot_distribution(self, figsize=(12, 5), show_samples=True):
+    def plot_distribution(self, figsize=(12, 6), show_samples=True):
         """
         绘制分布图,返回base64编码的图片
         """
@@ -507,6 +507,8 @@ class Variable:
                     fontsize=14, fontweight='bold')
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
+        # 避免极小范围下出现科学计数法偏移
+        ax.ticklabel_format(style='plain', axis='x', useOffset=False)
         
         # 转换为base64
         buf = io.BytesIO()
@@ -1564,12 +1566,15 @@ class MonteCarloSimulator:
         
         return json.dumps(data, indent=2, ensure_ascii=False)
     
-    def plot_pareto_chart(self, figsize=(12, 6), threshold=0.8):
+    def plot_pareto_chart(self, figsize=None, threshold=0.8):
         """
         绘制 Pareto 图，显示各变量对结果的贡献度
         """
         if self.sensitivity_results is None:
             raise ValueError("请先运行模拟以获得敏感性分析结果")
+
+        if figsize is None:
+            figsize = (12, 6)  # 使用固定、简单的比例，避免自适应造成难看
         
         # 提取数据
         var_names = list(self.sensitivity_results.keys())
@@ -1634,22 +1639,29 @@ class MonteCarloSimulator:
                   loc=legend_loc, fontsize=11, framealpha=0.9)
         
         ax1.grid(True, alpha=0.3, axis='y')
+        fig.tight_layout()
         
         # 转换为base64
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buf, format='png', dpi=100)
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)
         
         return img_base64
     
-    def plot_tornado_chart(self, figsize=(12, 6)):
+    def plot_tornado_chart(self, figsize=None):
         """
         绘制龙卷风图（Tornado Chart），显示各变量对结果的影响方向
         """
         if self.sensitivity_results is None:
             raise ValueError("请先运行模拟以获得敏感性分析结果")
+
+        if figsize is None:
+            var_count = max(1, len(self.sensitivity_results))
+            # 水平条形：固定宽度 12，高度随数量增加，避免过扁
+            height = max(6.0, min(12.0, 3.0 + 0.6 * var_count))
+            figsize = (12, height)
         
         # 提取数据并按绝对相关系数排序
         var_names = list(self.sensitivity_results.keys())
@@ -1689,10 +1701,11 @@ class MonteCarloSimulator:
             Patch(facecolor='red', alpha=0.7, label='Negative')
         ]
         ax.legend(handles=legend_elements, loc='best', fontsize=11)
+        fig.tight_layout()
         
         # 转换为base64
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buf, format='png', dpi=100)
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)
