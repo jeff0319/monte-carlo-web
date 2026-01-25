@@ -775,10 +775,12 @@ class MonteCarloSimulator:
 
         return payload
 
-    def export_input_json(self, include_data: bool = True, max_data_points: Optional[int] = None) -> str:
+    def export_input_json(self, include_data: bool = True, max_data_points: Optional[int] = None, pretty: bool = False) -> str:
         """Export the input config as JSON for reuse."""
         payload = self._build_input_payload(include_data=include_data, max_data_points=max_data_points)
-        return json.dumps(payload, indent=2, ensure_ascii=False)
+        if pretty:
+            return json.dumps(payload, indent=2, ensure_ascii=False)
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
     
     def get_variable_info(self):
         """
@@ -1343,11 +1345,6 @@ class MonteCarloSimulator:
             report_lines.append(self.formula_str)
             report_lines.append("")
 
-        # 输入 JSON 快照（用于复现）
-        report_lines.append("=== Input JSON ===")
-        report_lines.append(self.export_input_json(include_data=True, max_data_points=50))
-        report_lines.append("")
-        
         report_lines.append("=" * 70)
         report_lines.append("End of Report")
         report_lines.append("=" * 70)
