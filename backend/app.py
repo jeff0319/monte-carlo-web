@@ -539,6 +539,7 @@ def download_report_zip():
             # 主报告
             report = simulator.generate_report(confidence_levels)
             zf.writestr('analysis_report.txt', report)
+            zf.writestr('input.json', simulator.export_input_json(include_data=True))
         
         zip_buffer.seek(0)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -581,6 +582,7 @@ def download_full_zip():
             # 文本报告
             report = simulator.generate_report(confidence_levels)
             zf.writestr('analysis_report.txt', report)
+            zf.writestr('input.json', simulator.export_input_json(include_data=True))
             
             # 图表 PNG 文件
             if 'result_plot' in simulator.chart_cache:

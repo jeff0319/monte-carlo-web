@@ -530,6 +530,8 @@ class MonteCarloSimulator:
         self.result = None
         self.result_name = 'Result'
         self.formula_str = None
+        self.n_samples = None
+        self.random_seed = None
         self.confidence_levels = [0.90, 0.95, 0.99]  # 默认置信水平
         self.sensitivity_results = None
         self.cdf_fit_result = None
@@ -666,6 +668,8 @@ class MonteCarloSimulator:
         self.result_name = result_name
         self.formula_str = formula_str
         self.cdf_fit_degree = cdf_fit_degree
+        self.n_samples = n_samples
+        self.random_seed = random_seed
 
         # 使用单个生成器保证重现性且避免变量间的相关性
         rng = np.random.default_rng(random_seed)
@@ -694,6 +698,87 @@ class MonteCarloSimulator:
         
         # 清空图表缓存
         self.chart_cache = {}
+
+    def _params_from_dist(self, var: "Variable") -> dict:
+        """Map dist_params to input-style keys for params mode."""
+        if var.dist_params is None:
+            return {}
+
+        dist_type = 'norm' if var.dist_type == 'normal' else var.dist_type
+        params = {}
+
+        if dist_type == 'norm':
+            params = {'mean': var.dist_params[0], 'std': var.dist_params[1]}
+        elif dist_type == 't':
+            params = {'df': var.dist_params[0], 'mean': var.dist_params[1], 'std': var.dist_params[2]}
+        elif dist_type == 'lognormal':
+            params = {'mean': var.dist_params[0], 'std': var.dist_params[1]}
+        elif dist_type == 'uniform':
+            params = {'min': var.dist_params[0], 'max': var.dist_params[1]}
+        elif dist_type == 'triangular':
+            params = {'min': var.dist_params[0], 'mode': var.dist_params[1], 'max': var.dist_params[2]}
+        elif dist_type == 'beta':
+            params = {
+                'alpha': var.dist_params[0],
+                'beta': var.dist_params[1],
+                'min': var.dist_params[2],
+                'max': var.dist_params[3],
+            }
+        elif dist_type == 'gamma':
+            params = {'shape': var.dist_params[0], 'scale': var.dist_params[1]}
+        elif dist_type == 'exponential':
+            params = {'scale': var.dist_params[0]}
+        elif dist_type == 'weibull':
+            params = {'shape': var.dist_params[0], 'scale': var.dist_params[1]}
+
+        # Ensure json-serializable primitives
+        for key, value in list(params.items()):
+            if isinstance(value, (np.floating, np.integer)):
+                params[key] = float(value)
+        return params
+
+    def _build_input_payload(self, include_data: bool = True, max_data_points: Optional[int] = None) -> dict:
+        """Build a JSON-serializable snapshot of the input config."""
+        payload = {
+            'formula': self.formula_str if self.formula_str else None,
+            'result_name': self.result_name,
+            'n_samples': int(self.n_samples) if self.n_samples is not None else (len(self.result) if self.result is not None else None),
+            'cdf_fit_degree': self.cdf_fit_degree,
+            'random_seed': self.random_seed,
+            'variables': {}
+        }
+
+        for var_name, var in self.variables.items():
+            var_payload = {
+                'input_mode': var.input_mode,
+                'dist_type': var.dist_type,
+            }
+
+            if var.min_value is not None:
+                var_payload['min_value'] = float(var.min_value)
+            if var.max_value is not None:
+                var_payload['max_value'] = float(var.max_value)
+
+            if var.input_mode == 'data':
+                if include_data:
+                    data_list = var.raw_data.tolist() if var.raw_data is not None else []
+                    total = len(data_list)
+                    if max_data_points is not None and total > max_data_points:
+                        var_payload['data'] = data_list[:max_data_points]
+                        var_payload['_data_truncated'] = {'shown': int(max_data_points), 'total': int(total)}
+                    else:
+                        var_payload['data'] = data_list
+            else:
+                var_payload.update(self._params_from_dist(var))
+
+            payload['variables'][var_name] = var_payload
+
+        return payload
+
+    def export_input_json(self, include_data: bool = True, max_data_points: Optional[int] = None) -> str:
+        """Export the input config as JSON for reuse."""
+        payload = self._build_input_payload(include_data=include_data, max_data_points=max_data_points)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
     
     def get_variable_info(self):
         """
@@ -1257,6 +1342,11 @@ class MonteCarloSimulator:
             report_lines.append("=== Formula ===")
             report_lines.append(self.formula_str)
             report_lines.append("")
+
+        # 输入 JSON 快照（用于复现）
+        report_lines.append("=== Input JSON ===")
+        report_lines.append(self.export_input_json(include_data=True, max_data_points=50))
+        report_lines.append("")
         
         report_lines.append("=" * 70)
         report_lines.append("End of Report")
