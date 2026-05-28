@@ -91,6 +91,69 @@
             });
     }
 
+        function importInputJsonFile(event) {
+            const fileInput = event.target;
+            const file = fileInput.files && fileInput.files[0];
+            if (!file) {
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(loadEvent) {
+                try {
+                    const payload = JSON.parse(loadEvent.target.result);
+                    const variables = payload.variables || payload;
+
+                    if (!variables || typeof variables !== 'object' || Array.isArray(variables)) {
+                        throw new Error('input.json must contain a variables object');
+                    }
+
+                    const variablesText = JSON.stringify(variables, null, 2);
+                    const jsonInput = document.getElementById('jsonInput');
+                    jsonInput.value = variablesText;
+                    adjustTextareaHeight(jsonInput, variablesText);
+
+                    if (payload.formula) {
+                        document.getElementById('simpleFormula').checked = true;
+                        document.getElementById('advancedFormula').checked = false;
+                        document.getElementById('simpleFormulaDiv').style.display = 'block';
+                        document.getElementById('advancedFormulaDiv').style.display = 'none';
+                        document.getElementById('simpleFormulaExamples').style.display = 'block';
+                        document.getElementById('advancedFormulaExamples').style.display = 'none';
+                        document.getElementById('formula').value = payload.formula;
+                    }
+
+                    if (payload.result_name) {
+                        document.getElementById('resultName').value = payload.result_name;
+                    }
+                    if (payload.n_samples !== undefined && payload.n_samples !== null) {
+                        document.getElementById('nSamples').value = payload.n_samples;
+                    }
+                    if (payload.cdf_fit_degree !== undefined && payload.cdf_fit_degree !== null) {
+                        document.getElementById('cdfDegree').value = payload.cdf_fit_degree;
+                    }
+                    if (payload.random_seed !== undefined && payload.random_seed !== null) {
+                        document.getElementById('randomSeed').value = payload.random_seed;
+                    }
+
+                    showLocalStatus('addVariableStatus', 'Importing input.json...', 'info', true);
+                    showStatus('Importing input.json...', 'info');
+                    addVariablesFromJson();
+                } catch (error) {
+                    showLocalStatus('addVariableStatus', 'Import failed: ' + error.message, 'error', false);
+                    showStatus('Import failed: ' + error.message, 'error');
+                } finally {
+                    fileInput.value = '';
+                }
+            };
+            reader.onerror = function() {
+                showLocalStatus('addVariableStatus', 'Import failed: could not read file', 'error', false);
+                showStatus('Import failed: could not read file', 'error');
+                fileInput.value = '';
+            };
+            reader.readAsText(file);
+        }
+
         function updateVariableList(variables) {
             const listDiv = document.getElementById('variableList');
             const itemsDiv = document.getElementById('variableItems');
@@ -108,9 +171,13 @@
                 item.className = 'variable-item';
                 
                 let paramStr = '';
-                if (info.dist_type === 'norm' || info.dist_type === 'normal') {
+                const distributionLabel = info.sampling_method === 'bootstrap' ? 'empirical' : info.dist_type;
+                if (info.sampling_method === 'bootstrap') {
+                    const statisticLabel = info.bootstrap_statistic === 'value' ? 'single values' : 'sample mean';
+                    paramStr = `Non-parametric bootstrap (${statisticLabel})`;
+                } else if ((info.dist_type === 'norm' || info.dist_type === 'normal') && info.dist_params) {
                     paramStr = `μ=${info.dist_params[0].toFixed(3)}, σ=${info.dist_params[1].toFixed(3)}`;
-                } else if (info.dist_type === 't') {
+                } else if (info.dist_type === 't' && info.dist_params) {
                     paramStr = `df=${info.dist_params[0].toFixed(1)}, loc=${info.dist_params[1].toFixed(3)}, scale=${info.dist_params[2].toFixed(3)}`;
                 }
 
@@ -132,7 +199,9 @@
                 item.innerHTML = `
                     <div>
                         <strong>${name}</strong>
-                        <span class="badge badge-info">${info.dist_type}</span>
+                        <span class="badge badge-info">${distributionLabel}</span>
+                        ${info.sampling_method === 'bootstrap' ? '<span class="badge badge-success">bootstrap</span>' : ''}
+                        ${info.sampling_method === 'bootstrap' ? `<span class="badge badge-info">${info.bootstrap_statistic}</span>` : ''}
                     </div>
                     <div class="variable-info">${paramStr}</div>
                     <div class="variable-info" style="color: #666; font-size: 0.9em;">Range: ${rangeStr}</div>
@@ -146,11 +215,13 @@
             const resultName = document.getElementById('resultName').value;
             const nSamples = parseInt(document.getElementById('nSamples').value);
             const cdfDegree = parseInt(document.getElementById('cdfDegree').value);
+            const randomSeed = parseInt(document.getElementById('randomSeed').value);
 
             let requestData = {
                 result_name: resultName,
                 n_samples: nSamples,
-                cdf_fit_degree: cdfDegree
+                cdf_fit_degree: cdfDegree,
+                random_seed: randomSeed
             };
 
             if (formulaType === 'simple') {

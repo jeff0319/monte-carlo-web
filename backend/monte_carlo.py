@@ -22,7 +22,7 @@ class Variable:
     Monte Carlo模拟变量类
     管理单个变量的数据预处理、分布拟合和Monte Carlo抽样
     支持两种输入方式:
-    1. 原始数据点
+    1. 原始数据点（可拟合分布或使用 bootstrap 抽样）
     2. 统计参数
     
     支持的分布类型:
@@ -37,8 +37,10 @@ class Variable:
     - weibull: Weibull分布
     """
     
-    def __init__(self, name: str, data: Optional[np.ndarray] = None, 
-                 dist_type: str = 'norm', 
+    def __init__(self, name: str, data: Optional[np.ndarray] = None,
+                 dist_type: str = 'norm',
+                 sampling_method: str = 'bootstrap',
+                 bootstrap_statistic: str = 'mean',
                  min_value: Optional[float] = None, 
                  max_value: Optional[float] = None,
                  **kwargs):
@@ -53,6 +55,14 @@ class Variable:
             原始测试数据 (方式1)
         dist_type : str
             分布类型
+        sampling_method : str
+            data 模式的抽样方式:
+            - fit: 根据原始数据拟合 dist_type 指定的分布后抽样
+            - bootstrap: 从原始数据中有放回抽样，不假设参数分布
+        bootstrap_statistic : str
+            bootstrap 的统计量:
+            - mean: 每轮有放回抽取原始样本量的数据并取均值
+            - value: 每轮直接抽取一个原始观测值
         min_value : float, optional
             采样的最小值限制
         max_value : float, optional
@@ -74,18 +84,30 @@ class Variable:
         self.raw_data = None
         self.dist_type = None
         self.dist_params = None
+        self.sampling_method = sampling_method or 'bootstrap'
+        self.bootstrap_statistic = bootstrap_statistic or 'mean'
         self.samples = None
         self.min_value = min_value
         self.max_value = max_value
+
+        if self.sampling_method not in ['fit', 'bootstrap']:
+            raise ValueError(f"不支持的抽样方式: {self.sampling_method}. 支持的方式: fit, bootstrap")
+        if self.bootstrap_statistic not in ['mean', 'value']:
+            raise ValueError(
+                f"不支持的 bootstrap 统计量: {self.bootstrap_statistic}. 支持的统计量: mean, value"
+            )
         
         # 判断输入方式
         if data is not None:
             # 方式1: 原始数据
             self.input_mode = 'data'
-            self.raw_data = np.array(data)
+            self.raw_data = np.array(data, dtype=float)
+            self.dist_type = dist_type
         else:
             # 方式2: 统计参数
             self.input_mode = 'params'
+            self.sampling_method = 'fit'
+            self.bootstrap_statistic = 'mean'
             self.dist_type = dist_type
             self._parse_params(dist_type, kwargs)
     
@@ -225,12 +247,28 @@ class Variable:
         rng : np.random.Generator, optional
             可选的随机数生成器。传入后优先使用，不再设置/修改全局随机种子。
         """
-        if self.dist_params is None:
-            raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
-
         # 生成随机数生成器（优先使用传入的 rng）
         if rng is None:
             rng = np.random.default_rng(random_seed)
+
+        if self.input_mode == 'data' and self.sampling_method == 'bootstrap':
+            if self.raw_data is None or len(self.raw_data) == 0:
+                raise ValueError(f"变量 {self.name} 没有可用于 bootstrap 的原始数据")
+
+            bootstrap_data = self._bootstrap_source_data()
+            if len(bootstrap_data) == 0:
+                raise ValueError(
+                    f"变量 {self.name} 的原始数据在限制范围内为空，无法进行 bootstrap 抽样"
+                )
+
+            if self.bootstrap_statistic == 'value':
+                self.samples = rng.choice(bootstrap_data, size=n_samples, replace=True)
+            else:
+                self.samples = self._bootstrap_mean_samples(bootstrap_data, n_samples, rng)
+            return
+
+        if self.dist_params is None:
+            raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
 
         # 获取分布对象
         dist = self._get_distribution()
@@ -252,6 +290,182 @@ class Variable:
 
         # 使用PPF（分位数函数）转换为目标分布
         self.samples = dist.ppf(u)
+
+    def _bootstrap_source_data(self):
+        """Return raw data after applying bootstrap min/max limits."""
+        if self.raw_data is None:
+            return np.array([])
+
+        bootstrap_data = self.raw_data
+        if self.min_value is not None:
+            bootstrap_data = bootstrap_data[bootstrap_data >= self.min_value]
+        if self.max_value is not None:
+            bootstrap_data = bootstrap_data[bootstrap_data <= self.max_value]
+        return bootstrap_data
+
+    def _bootstrap_mean_samples(self, data, n_samples, rng):
+        """Generate bootstrap replicate means without allocating the full draw matrix."""
+        n_source = len(data)
+        samples = np.empty(n_samples, dtype=float)
+        max_draws_per_batch = 5_000_000
+        batch_size = max(1, min(n_samples, max_draws_per_batch // n_source))
+
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            draws = rng.choice(data, size=(end - start, n_source), replace=True)
+            samples[start:end] = draws.mean(axis=1)
+
+        return samples
+
+    def _bootstrap_hist_bins(self, data):
+        """Build bins that respect bootstrap's discrete empirical values."""
+        data = np.asarray(data)
+        if len(data) == 0:
+            return 10
+
+        unique_vals = np.unique(data)
+        if len(unique_vals) == 1:
+            center = unique_vals[0]
+            width = max(abs(center) * 0.05, 0.5)
+            return np.array([center - width, center + width])
+
+        if len(unique_vals) <= 50:
+            mids = (unique_vals[:-1] + unique_vals[1:]) / 2
+            first_width = mids[0] - unique_vals[0]
+            last_width = unique_vals[-1] - mids[-1]
+            return np.concatenate((
+                [unique_vals[0] - first_width],
+                mids,
+                [unique_vals[-1] + last_width],
+            ))
+
+        data_range = data.max() - data.min()
+        if data_range == 0:
+            return 10
+        iqr = np.subtract(*np.percentile(data, [75, 25]))
+        if iqr <= 0:
+            bins = int(np.sqrt(len(data)))
+        else:
+            bin_width = 2 * iqr * (len(data) ** (-1/3))
+            bins = int(np.ceil(data_range / bin_width)) if bin_width > 0 else int(np.sqrt(len(data)))
+        return int(np.clip(bins, 20, 80))
+
+    def _plot_bootstrap_distribution(self, ax, samples_for_plot=None, show_samples=True):
+        """Plot bootstrap as an empirical probability distribution, not a continuous PDF."""
+        source_data = self._bootstrap_source_data()
+        if len(source_data) == 0:
+            raise ValueError(f"变量 {self.name} 的原始数据在限制范围内为空，无法绘制 bootstrap 分布")
+
+        if self.bootstrap_statistic == 'mean':
+            self._plot_bootstrap_mean_distribution(ax, source_data, samples_for_plot, show_samples)
+            return
+
+        plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
+        combined = source_data if plot_samples is None else np.concatenate([source_data, plot_samples])
+        bins = self._bootstrap_hist_bins(combined)
+
+        max_probability = 0
+        source_weights = np.ones(len(source_data)) / len(source_data)
+        source_counts, _, _ = ax.hist(
+            source_data,
+            bins=bins,
+            weights=source_weights,
+            histtype='step',
+            linewidth=2.2,
+            label='Bootstrap Source Data',
+            color='steelblue',
+            zorder=3,
+        )
+        if len(source_counts) > 0:
+            max_probability = max(max_probability, np.max(source_counts))
+
+        has_samples = plot_samples is not None and show_samples
+        if has_samples:
+            sample_weights = np.ones(len(plot_samples)) / len(plot_samples)
+            sample_counts, _, _ = ax.hist(
+                plot_samples,
+                bins=bins,
+                weights=sample_weights,
+                alpha=0.45,
+                label='Bootstrap Samples',
+                color='green',
+                edgecolor='darkgreen',
+                linewidth=0.5,
+                zorder=2,
+            )
+            if len(sample_counts) > 0:
+                max_probability = max(max_probability, np.max(sample_counts))
+
+        if len(source_data) <= 50:
+            rug_y = np.full(len(source_data), -0.03 * max(max_probability, 1e-8))
+            ax.scatter(source_data, rug_y, alpha=0.65, s=45, marker='|',
+                       label='Source Observations', color='black', zorder=4,
+                       clip_on=False)
+
+        data_min = np.min(combined)
+        data_max = np.max(combined)
+        if data_max == data_min:
+            padding = max(abs(data_min) * 0.1, 1)
+        else:
+            padding = 0.08 * (data_max - data_min)
+        ax.set_xlim(data_min - padding, data_max + padding)
+        ax.set_ylim(-0.08 * max(max_probability, 1e-8), max_probability * 1.18)
+        ax.set_xlabel('Value', fontsize=12)
+        ax.set_ylabel('Probability', fontsize=12)
+        ax.set_title(f'{self.name} - Non-parametric Bootstrap{" Samples" if has_samples else ""}',
+                    fontsize=14, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.ticklabel_format(style='plain', axis='x', useOffset=False)
+
+    def _plot_bootstrap_mean_distribution(self, ax, source_data, samples_for_plot=None, show_samples=True):
+        """Plot the bootstrap distribution of the sample mean."""
+        plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
+        raw_mean = np.mean(source_data)
+
+        if plot_samples is not None and show_samples:
+            bins = self._bootstrap_hist_bins(plot_samples)
+            ax.hist(
+                plot_samples,
+                bins=bins,
+                density=True,
+                alpha=0.48,
+                label='Bootstrap Mean Samples',
+                color='green',
+                edgecolor='darkgreen',
+                linewidth=0.5,
+                zorder=2,
+            )
+
+        ax.axvline(raw_mean, color='steelblue', linestyle='--', linewidth=2.0,
+                   label=f'Raw Mean: {raw_mean:.4g}', zorder=3)
+
+        if len(source_data) <= 50:
+            y_min, y_max = ax.get_ylim()
+            rug_y = np.full(len(source_data), y_min - 0.03 * max(y_max - y_min, 1e-8))
+            ax.scatter(source_data, rug_y, alpha=0.65, s=45, marker='|',
+                       label='Source Observations', color='black', zorder=4,
+                       clip_on=False)
+            ax.set_ylim(y_min - 0.08 * max(y_max - y_min, 1e-8), y_max)
+
+        if plot_samples is not None:
+            data_min = min(np.min(plot_samples), np.min(source_data), raw_mean)
+            data_max = max(np.max(plot_samples), np.max(source_data), raw_mean)
+        else:
+            data_min = np.min(source_data)
+            data_max = np.max(source_data)
+        if data_max == data_min:
+            padding = max(abs(data_min) * 0.1, 1)
+        else:
+            padding = 0.08 * (data_max - data_min)
+        ax.set_xlim(data_min - padding, data_max + padding)
+        ax.set_xlabel('Value', fontsize=12)
+        ax.set_ylabel('Probability Density', fontsize=12)
+        ax.set_title(f'{self.name} - Bootstrap Distribution of Mean',
+                    fontsize=14, fontweight='bold')
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.ticklabel_format(style='plain', axis='x', useOffset=False)
 
     def _get_distribution(self):
         """获取scipy分布对象"""
@@ -282,7 +496,7 @@ class Variable:
         """
         绘制分布图,返回base64编码的图片
         """
-        if self.dist_params is None:
+        if self.dist_params is None and self.sampling_method != 'bootstrap':
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
         
         fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -327,6 +541,15 @@ class Variable:
 
             bins = int(np.sqrt(len(data)))
             return int(np.clip(bins, 60, 120))
+
+        if self.input_mode == 'data' and self.sampling_method == 'bootstrap':
+            self._plot_bootstrap_distribution(ax, samples_for_plot=samples_for_plot, show_samples=show_samples)
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            buf.seek(0)
+            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+            plt.close(fig)
+            return img_base64
         
         # 确定x轴范围 - 根据分布类型和是否有样本数据智能确定
         plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
@@ -395,8 +618,11 @@ class Variable:
         
         x_range = np.linspace(x_min, x_max, 500)
         
-        # 绘制拟合的分布曲线
-        if self.dist_type in ['norm', 'normal']:
+        # 绘制拟合的分布曲线。bootstrap 不假设参数分布，只展示原始数据和抽样结果。
+        pdf = np.array([0.0])
+        if self.sampling_method == 'bootstrap':
+            max_pdf = 1.0
+        elif self.dist_type in ['norm', 'normal']:
             pdf = stats.norm.pdf(x_range, self.dist_params[0], self.dist_params[1])
             ax.plot(x_range, pdf, 'r-', lw=2.5, 
                    label=f'Normal Distribution\nμ={self.dist_params[0]:.3f}, σ={self.dist_params[1]:.3f}', 
@@ -453,7 +679,8 @@ class Variable:
             ax.plot(x_range, pdf, 'r-', lw=2.5, label=f'{self.dist_type} Distribution', zorder=3)
         
         # 计算 PDF 的最大值，用于统一 y 轴范围
-        max_pdf = np.max(pdf)
+        if self.sampling_method != 'bootstrap':
+            max_pdf = np.max(pdf)
 
         # 如果有Monte Carlo样本且需要显示
         has_samples = plot_samples is not None and show_samples
@@ -503,7 +730,8 @@ class Variable:
         
         ax.set_xlabel('Value', fontsize=12)
         ax.set_ylabel('Probability Density', fontsize=12)
-        ax.set_title(f'{self.name} - Distribution Fit{" and MC Samples" if has_samples else ""}', 
+        title_prefix = 'Bootstrap Sampling' if self.sampling_method == 'bootstrap' else 'Distribution Fit'
+        ax.set_title(f'{self.name} - {title_prefix}{" and MC Samples" if has_samples else ""}',
                     fontsize=14, fontweight='bold')
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
@@ -542,7 +770,9 @@ class MonteCarloSimulator:
         self.chart_cache = {}  # 图表缓存
     
     def add_variable(self, name: str, data: Optional[np.ndarray] = None,
-                    dist_type: str = 'norm', 
+                    dist_type: str = 'norm',
+                    sampling_method: str = 'bootstrap',
+                    bootstrap_statistic: str = 'mean',
                     min_value: Optional[float] = None, 
                     max_value: Optional[float] = None,
                     **kwargs):
@@ -557,6 +787,10 @@ class MonteCarloSimulator:
             原始数据（如果提供，则为 data 模式）
         dist_type : str
             分布类型
+        sampling_method : str
+            data 模式的抽样方式：fit 或 bootstrap，data 默认 bootstrap
+        bootstrap_statistic : str
+            bootstrap 的统计量：mean 或 value
         min_value : float, optional
             采样最小值限制
         max_value : float, optional
@@ -570,10 +804,13 @@ class MonteCarloSimulator:
         
         # 如果提供了 data，使用 data 模式
         if data is not None:
-            var = Variable(name, data=data, dist_type=dist_type, 
+            var = Variable(name, data=data, dist_type=dist_type,
+                          sampling_method=sampling_method,
+                          bootstrap_statistic=bootstrap_statistic,
                           min_value=min_value, max_value=max_value)
-            # 进行分布拟合
-            var.fit_distribution(dist_type)
+            if sampling_method == 'fit':
+                # 进行分布拟合
+                var.fit_distribution(dist_type)
         else:
             # 使用 params 模式，传递所有参数
             var = Variable(name, dist_type=dist_type, 
@@ -600,32 +837,37 @@ class MonteCarloSimulator:
             var_list = []
             for var_name, var_config in json_data.items():
                 if isinstance(var_config, dict):
+                    var_config = dict(var_config)
                     var_config['name'] = var_name
-                    # 兼容旧格式: type -> input_mode
-                    if 'type' in var_config and 'input_mode' not in var_config:
-                        var_config['input_mode'] = var_config['type']
-                    # 兼容旧格式: values -> data
-                    if 'values' in var_config and 'data' not in var_config:
-                        var_config['data'] = var_config['values']
-                    # 兼容旧格式: distribution -> dist_type
-                    if 'distribution' in var_config and 'dist_type' not in var_config:
-                        var_config['dist_type'] = var_config['distribution']
-                    # 兼容旧格式: min_limit -> min_value, max_limit -> max_value
-                    if 'min_limit' in var_config and 'min_value' not in var_config:
-                        var_config['min_value'] = var_config['min_limit']
-                    if 'max_limit' in var_config and 'max_value' not in var_config:
-                        var_config['max_value'] = var_config['max_limit']
                     var_list.append(var_config)
             json_data = var_list
         
         # 处理数组格式
         for var_def in json_data:
+            var_def = dict(var_def)
+            # 兼容旧格式: type -> input_mode
+            if 'type' in var_def and 'input_mode' not in var_def:
+                var_def['input_mode'] = var_def['type']
+            # 兼容旧格式: values -> data
+            if 'values' in var_def and 'data' not in var_def:
+                var_def['data'] = var_def['values']
+            # 兼容旧格式: distribution -> dist_type
+            if 'distribution' in var_def and 'dist_type' not in var_def:
+                var_def['dist_type'] = var_def['distribution']
+            # 兼容旧格式: min_limit -> min_value, max_limit -> max_value
+            if 'min_limit' in var_def and 'min_value' not in var_def:
+                var_def['min_value'] = var_def['min_limit']
+            if 'max_limit' in var_def and 'max_value' not in var_def:
+                var_def['max_value'] = var_def['max_limit']
+
             name = var_def.get('name')
             if not name:
                 raise ValueError("每个变量必须有name字段")
             
             input_mode = var_def.get('input_mode')
             dist_type = var_def.get('dist_type', 'norm')
+            sampling_method = var_def.get('sampling_method', 'bootstrap')
+            bootstrap_statistic = var_def.get('bootstrap_statistic', 'mean')
             min_value = var_def.get('min_value')
             max_value = var_def.get('max_value')
             
@@ -638,6 +880,8 @@ class MonteCarloSimulator:
                 if not data:
                     raise ValueError(f"变量 {name} 使用 data 模式但未提供 data 字段")
                 self.add_variable(name, data=np.array(data), dist_type=dist_type,
+                                sampling_method=sampling_method,
+                                bootstrap_statistic=bootstrap_statistic,
                                 min_value=min_value, max_value=max_value)
             
             elif input_mode == 'params':
@@ -760,6 +1004,9 @@ class MonteCarloSimulator:
                 var_payload['max_value'] = float(var.max_value)
 
             if var.input_mode == 'data':
+                var_payload['sampling_method'] = var.sampling_method
+                if var.sampling_method == 'bootstrap':
+                    var_payload['bootstrap_statistic'] = var.bootstrap_statistic
                 if include_data:
                     data_list = var.raw_data.tolist() if var.raw_data is not None else []
                     total = len(data_list)
@@ -775,12 +1022,36 @@ class MonteCarloSimulator:
 
         return payload
 
-    def export_input_json(self, include_data: bool = True, max_data_points: Optional[int] = None, pretty: bool = False) -> str:
+    def export_input_json(
+        self,
+        include_data: bool = True,
+        max_data_points: Optional[int] = None,
+        pretty: bool = False,
+        compact_data_only: bool = False,
+    ) -> str:
         """Export the input config as JSON for reuse."""
         payload = self._build_input_payload(include_data=include_data, max_data_points=max_data_points)
-        if pretty:
+
+        if not pretty:
+            return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+
+        if not compact_data_only:
             return json.dumps(payload, indent=2, ensure_ascii=False)
-        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+
+        replacements = []
+        token_index = 0
+        for var_payload in payload.get('variables', {}).values():
+            data_list = var_payload.get('data')
+            if isinstance(data_list, list):
+                token = f"__DATA_PLACEHOLDER_{token_index}__"
+                token_index += 1
+                var_payload['data'] = token
+                replacements.append((token, json.dumps(data_list, ensure_ascii=False, separators=(',', ':'))))
+
+        rendered = json.dumps(payload, indent=2, ensure_ascii=False)
+        for token, compact in replacements:
+            rendered = rendered.replace(f"\"{token}\"", compact)
+        return rendered
     
     def get_variable_info(self):
         """
@@ -791,6 +1062,8 @@ class MonteCarloSimulator:
             info[name] = {
                 'input_mode': var.input_mode,
                 'dist_type': var.dist_type,
+                'sampling_method': var.sampling_method,
+                'bootstrap_statistic': var.bootstrap_statistic,
                 'dist_params': var.dist_params,
                 'has_samples': var.samples is not None,
                 'min_value': var.min_value,
@@ -1046,17 +1319,17 @@ class MonteCarloSimulator:
             if bin_width <= 0:
                 return 50
             bins = int(np.ceil(data_range / bin_width))
-            # 结果分布用更稳的范围
+            # 结果分布图用于报告阅读，bin 数不要随大样本过度变密。
             if data_range <= 0.2 * abs(np.mean(data)) if np.mean(data) != 0 else data_range:
-                return int(np.clip(bins, 40, 150))
-            return int(np.clip(bins, 40, 120))
+                return int(np.clip(bins, 30, 80))
+            return int(np.clip(bins, 30, 70))
 
         n_bins = _smart_bins(data_in_range, x_min_display, x_max_display)
         
         # 1. 直方图和KDE
         ax1 = fig.add_subplot(gs[0, :2])
         ax1.hist(result_for_plot, bins=n_bins, density=True, alpha=0.6,
-                color='skyblue', edgecolor='black', label='Histogram')
+                color='skyblue', edgecolor='white', linewidth=0.5, label='Histogram')
 
         from scipy.stats import gaussian_kde
         kde = gaussian_kde(result_for_plot)
@@ -1100,13 +1373,19 @@ class MonteCarloSimulator:
         ax2 = fig.add_subplot(gs[0, 2])
         bp = ax2.boxplot([self.result], vert=True, patch_artist=True,
                         labels=[self.result_name],
+                        whis=(5, 95),
+                        showfliers=False,
                         boxprops=dict(facecolor='lightgreen', alpha=0.7),
                         medianprops=dict(color='red', linewidth=2),
                         whiskerprops=dict(linewidth=1.5),
                         capprops=dict(linewidth=1.5))
+        ax2.plot(1, mean_val, marker='o', markersize=5, markerfacecolor='white',
+                 markeredgecolor='#2f6fbb', markeredgewidth=1.4, alpha=0.85,
+                 label='Mean')
         
         ax2.set_ylabel(f'{self.result_name} Value', fontsize=12)
-        ax2.set_title(f'{self.result_name} - Box Plot', fontsize=14, fontweight='bold')
+        ax2.set_title(f'{self.result_name} - Box Plot (5-95% Whiskers)', fontsize=14, fontweight='bold')
+        ax2.legend(fontsize=8, loc='best', framealpha=0.75)
         ax2.grid(True, alpha=0.3, axis='y')
         
         # 3. 累积分布函数
@@ -1318,16 +1597,29 @@ class MonteCarloSimulator:
         for var_name, var in self.variables.items():
             report_lines.append(f"{var_name}:")
             report_lines.append(f"  Input Mode: {var.input_mode}")
-            report_lines.append(f"  Distribution: {var.dist_type}")
-            if var.dist_type == 'norm':
+            if var.input_mode == 'data':
+                report_lines.append(f"  Sampling Method: {var.sampling_method}")
+                if var.sampling_method == 'bootstrap':
+                    report_lines.append(f"  Bootstrap Statistic: {var.bootstrap_statistic}")
+            if var.sampling_method == 'bootstrap':
+                if var.bootstrap_statistic == 'mean':
+                    report_lines.append("  Distribution: bootstrap distribution of mean")
+                else:
+                    report_lines.append("  Distribution: empirical bootstrap values")
+            else:
+                report_lines.append(f"  Distribution: {var.dist_type}")
+            if var.dist_params is not None and var.dist_type == 'norm':
                 report_lines.append(f"  Parameters: μ={var.dist_params[0]:.6f}, σ={var.dist_params[1]:.6f}")
-            elif var.dist_type == 't':
+            elif var.dist_params is not None and var.dist_type == 't':
                 report_lines.append(f"  Parameters: df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}")
             if var.min_value is not None or var.max_value is not None:
                 report_lines.append(f"  Limits: [{var.min_value if var.min_value is not None else '-∞'}, {var.max_value if var.max_value is not None else '+∞'}]")
             if var.input_mode == 'data' and var.raw_data is not None:
                 raw_vals = var.raw_data
                 report_lines.append(f"  Raw Data Count: {len(raw_vals)}")
+                if var.sampling_method == 'bootstrap':
+                    bootstrap_vals = var._bootstrap_source_data()
+                    report_lines.append(f"  Bootstrap Source Count: {len(bootstrap_vals)}")
                 report_lines.append(
                     f"  Raw Data Stats: min={np.min(raw_vals):.6f}, max={np.max(raw_vals):.6f}, "
                     f"mean={np.mean(raw_vals):.6f}, std={np.std(raw_vals, ddof=1):.6f}"
@@ -1371,10 +1663,12 @@ class MonteCarloSimulator:
         
         # 变量配置 - 表格化格式
         lines.append("# === VARIABLE CONFIGURATIONS ===")
-        lines.append("# Name, Input_Mode, Distribution, Parameters, Limits")
+        lines.append("# Name, Input_Mode, Sampling_Method, Bootstrap_Statistic, Distribution, Parameters, Limits")
         for var_name, var in self.variables.items():
             # 分布参数
-            if var.dist_type == 'norm':
+            if var.sampling_method == 'bootstrap':
+                params = f"bootstrap {var.bootstrap_statistic}"
+            elif var.dist_type == 'norm':
                 params = f"mean={var.dist_params[0]:.6f}, std={var.dist_params[1]:.6f}"
             elif var.dist_type == 't':
                 params = f"df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}"
@@ -1390,7 +1684,11 @@ class MonteCarloSimulator:
             else:
                 limits = "[-inf, +inf]"
             
-            lines.append(f"# {var_name}, {var.input_mode}, {var.dist_type}, {params}, {limits}")
+            distribution = f"bootstrap_{var.bootstrap_statistic}" if var.sampling_method == 'bootstrap' else var.dist_type
+            lines.append(
+                f"# {var_name}, {var.input_mode}, {var.sampling_method}, "
+                f"{var.bootstrap_statistic}, {distribution}, {params}, {limits}"
+            )
         lines.append("#")
         
         # 统计摘要 - 表格格式
@@ -1554,6 +1852,8 @@ class MonteCarloSimulator:
         for var_name, var in self.variables.items():
             data['variables'][var_name] = {
                 'input_mode': var.input_mode,
+                'sampling_method': var.sampling_method,
+                'bootstrap_statistic': var.bootstrap_statistic,
                 'dist_type': var.dist_type,
                 'dist_params': list(var.dist_params) if var.dist_params else None,
                 'limits': {

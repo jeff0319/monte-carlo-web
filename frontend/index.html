@@ -18,6 +18,24 @@
             <!-- Status Messages -->
             <div id="status" style="display: none;"></div>
 
+            <div class="step">
+                <div class="collapsible">
+                    <div class="collapsible-header" onclick="toggleCollapsible(this)">
+                        Restore Saved Configuration
+                    </div>
+                    <div class="collapsible-content">
+                        <div class="form-group" style="background: #f8f9fa; border-left: 4px solid #17a2b8; padding: 15px; border-radius: 4px;">
+                            <label>Import Full Input Snapshot</label>
+                            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-top: 8px;">
+                                <button onclick="document.getElementById('inputJsonFile').click()">Import input.json</button>
+                                <input type="file" id="inputJsonFile" accept=".json,application/json" style="display: none;" onchange="importInputJsonFile(event)">
+                                <div class="help-text" style="margin: 0;">Load the input.json from a report package to restore variables, formula, sample count, CDF degree, and random seed.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Step 1: Add Variables (JSON Only) -->
             <div class="step">
                 <h2>Step 1: Add Variables (JSON Format)</h2>
@@ -34,15 +52,21 @@
                                 <strong>必填字段:</strong>
                                 <ul style="margin: 8px 0; padding-left: 20px;">
                                     <li><code>type</code>: "data" (使用实测数据) 或 "params" (使用统计参数)</li>
-                                    <li><code>distribution</code>: 分布类型（见下方支持的9种分布）</li>
+                                    <li><code>distribution</code>: 分布类型（见下方支持的9种分布；data + bootstrap 时可省略，默认 normal）</li>
                                 </ul>
                                 <strong>可选字段:</strong>
                                 <ul style="margin: 8px 0; padding-left: 20px;">
                                     <li><code>min_limit</code>, <code>max_limit</code>: 限制采样范围</li>
+                                    <li><code>sampling_method</code>: 仅 data 类型使用，可选 <code>fit</code> 或 <code>bootstrap</code>，默认 <code>bootstrap</code></li>
+                                    <li><code>bootstrap_statistic</code>: 仅 <code>sampling_method="bootstrap"</code> 时使用，可选 <code>mean</code> 或 <code>value</code>，默认 <code>mean</code></li>
                                 </ul>
                                 <strong>Data 类型需要:</strong> <code>values</code> (数组)
                                 <br>
+                                <strong>Data 抽样方式:</strong> <code>fit</code> 会先拟合指定分布再抽样；<code>bootstrap</code> 不强制假设分布。<code>bootstrap_statistic="mean"</code> 表示每轮有放回抽取原始样本量的数据并取均值，适合计算均值估计量的不确定性；<code>bootstrap_statistic="value"</code> 表示每轮直接抽一个原始观测值，适合传播单次观测值的经验分布。使用 <code>min_limit</code>/<code>max_limit</code> 时，bootstrap 会先过滤原始数据，再从过滤后的数据抽样。当前 bootstrap 按变量独立抽样，不保留多个变量原始数据之间的行配对关系。
+                                <br>
                                 <strong>Params 类型需要:</strong> 根据分布类型不同而不同（见下方各分布参数说明）
+                                <br>
+                                <strong>字段别名:</strong> 也支持 <code>input_mode</code>/<code>data</code>/<code>dist_type</code>/<code>min_value</code>/<code>max_value</code>。
                             </div>
 
                             <h4>支持的9种概率分布</h4>
@@ -101,7 +125,29 @@
                                 </table>
                             </div>
 
-                            <h4>示例 1: t 分布 (Student's t)</h4>
+                            <h4>示例 1: Bootstrap 均值分布 (Data)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "P1": {
+    "type": "data",
+    "values": [25, 25, 17, 17, 13, 1, 5, 20, 8, 31,
+    16, 6, 5, 11, 14, 174, 8, 22, 8, 6,
+    9, 4, 77, 77, 75, 52, 15, 20, 14, 93,
+    3, 20, 124, 28, 36, 21, 29, 27, 3, 181,
+    22, 127, 43, 82, 59],
+    "sampling_method": "bootstrap"
+  },
+  "C": {
+    "type": "data",
+    "values": [34963.61, 32496.26, 35525.13, 32395.24, 31133.41, 31233.43, 29989.2, 26530.1, 36463.79],
+    "sampling_method": "bootstrap"
+  }
+}</code></pre>
+                                <div class="help-text">默认使用 <code>bootstrap_statistic="mean"</code>，适合公式中的变量代表一组测试值的均值。</div>
+                            </div>
+
+                            <h4>示例 2: t 分布 (Student's t)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -121,7 +167,21 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 2: 正态分布 (Normal)</h4>
+                            <h4>示例 3: Bootstrap 单个观测值 (Data)</h4>
+                            <div class="example-code">
+                                <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
+<pre><code>{
+  "单次浓度": {
+    "type": "data",
+    "values": [82, 91, 88, 105, 97, 76, 110, 94, 89, 101],
+    "sampling_method": "bootstrap",
+    "bootstrap_statistic": "value"
+  }
+}</code></pre>
+                                <div class="help-text">适用于公式中的变量代表一次随机观测，而不是一组测试值的均值。</div>
+                            </div>
+
+                            <h4>示例 4: 正态分布 (Normal)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -139,7 +199,7 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 3: 对数正态分布 (Lognormal)</h4>
+                            <h4>示例 5: 对数正态分布 (Lognormal)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -153,7 +213,7 @@
                             <div class="help-text">注意：mean 和 std 是对数空间的参数</div>
                             </div>
 
-                            <h4>示例 4: 均匀分布 (Uniform)</h4>
+                            <h4>示例 6: 均匀分布 (Uniform)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -166,7 +226,7 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 5: 三角分布 (Triangular)</h4>
+                            <h4>示例 7: 三角分布 (Triangular)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -181,7 +241,7 @@
                             <div class="help-text">适用于有最小值、最可能值、最大值的专家估计</div>
                             </div>
 
-                            <h4>示例 6: Beta 分布</h4>
+                            <h4>示例 8: Beta 分布</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -197,7 +257,7 @@
                             <div class="help-text">适用于有界变量，如百分比、概率等</div>
                             </div>
 
-                            <h4>示例 7: Gamma 分布</h4>
+                            <h4>示例 9: Gamma 分布</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -210,7 +270,7 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 8: 指数分布 (Exponential)</h4>
+                            <h4>示例 10: 指数分布 (Exponential)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -223,7 +283,7 @@
                             <div class="help-text">也可以使用 rate 参数（rate = 1/scale）</div>
                             </div>
 
-                            <h4>示例 9: Weibull 分布</h4>
+                            <h4>示例 11: Weibull 分布</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -236,7 +296,7 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 10: 混合使用多种分布</h4>
+                            <h4>示例 12: 混合使用多种分布</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -523,6 +583,10 @@
                         <label for="cdfDegree">CDF Fit Degree</label>
                         <input type="number" id="cdfDegree" value="8" min="1" max="30">
                         <div class="help-text">Polynomial fit degree (1-30)</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="randomSeed">Random Seed</label>
+                        <input type="number" id="randomSeed" value="4545">
                     </div>
                 </div>
 

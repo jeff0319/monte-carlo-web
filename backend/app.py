@@ -154,6 +154,8 @@ def add_variable():
         min_value = data.get('min_value')
         max_value = data.get('max_value')
         dist_type = data.get('dist_type', 'norm')
+        sampling_method = data.get('sampling_method', 'bootstrap')
+        bootstrap_statistic = data.get('bootstrap_statistic', 'mean')
         
         # 支持的分布类型
         supported_dists = ['norm', 'normal', 't', 'lognormal', 'uniform', 
@@ -161,11 +163,19 @@ def add_variable():
         
         if dist_type not in supported_dists:
             return jsonify({'error': f'不支持的分布类型: {dist_type}. 支持的类型: {", ".join(supported_dists)}'}), 400
+
+        if sampling_method not in ['fit', 'bootstrap']:
+            return jsonify({'error': f'不支持的抽样方式: {sampling_method}. 支持的方式: fit, bootstrap'}), 400
+
+        if bootstrap_statistic not in ['mean', 'value']:
+            return jsonify({'error': f'不支持的 bootstrap 统计量: {bootstrap_statistic}. 支持的统计量: mean, value'}), 400
         
         if input_mode == 'data':
             # 原始数据输入
             raw_data = data.get('data', [])
             simulator.add_variable(name, data=raw_data, dist_type=dist_type, 
+                                 sampling_method=sampling_method,
+                                 bootstrap_statistic=bootstrap_statistic,
                                  min_value=min_value, max_value=max_value)
         
         elif input_mode == 'params':
@@ -539,7 +549,7 @@ def download_report_zip():
             # 主报告
             report = simulator.generate_report(confidence_levels)
             zf.writestr('analysis_report.txt', report)
-            zf.writestr('input.json', simulator.export_input_json(include_data=True))
+            zf.writestr('input.json', simulator.export_input_json(include_data=True, pretty=True, compact_data_only=True))
         
         zip_buffer.seek(0)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -582,7 +592,7 @@ def download_full_zip():
             # 文本报告
             report = simulator.generate_report(confidence_levels)
             zf.writestr('analysis_report.txt', report)
-            zf.writestr('input.json', simulator.export_input_json(include_data=True))
+            zf.writestr('input.json', simulator.export_input_json(include_data=True, pretty=True, compact_data_only=True))
             
             # 图表 PNG 文件
             if 'result_plot' in simulator.chart_cache:
