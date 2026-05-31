@@ -8,7 +8,6 @@ import seaborn as sns
 from typing import Callable, List, Dict, Tuple, Optional
 import warnings
 import io
-import base64
 import json
 from datetime import datetime
 warnings.filterwarnings('ignore')
@@ -494,7 +493,7 @@ class Variable:
     
     def plot_distribution(self, figsize=(12, 6), show_samples=True):
         """
-        绘制分布图,返回base64编码的图片
+        绘制分布图，返回 matplotlib Figure。
         """
         if self.dist_params is None and self.sampling_method != 'bootstrap':
             raise ValueError(f"请先对变量 {self.name} 进行分布拟合")
@@ -544,12 +543,7 @@ class Variable:
 
         if self.input_mode == 'data' and self.sampling_method == 'bootstrap':
             self._plot_bootstrap_distribution(ax, samples_for_plot=samples_for_plot, show_samples=show_samples)
-            buf = io.BytesIO()
-            plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-            buf.seek(0)
-            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-            plt.close(fig)
-            return img_base64
+            return fig
         
         # 确定x轴范围 - 根据分布类型和是否有样本数据智能确定
         plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
@@ -738,14 +732,7 @@ class Variable:
         # 避免极小范围下出现科学计数法偏移
         ax.ticklabel_format(style='plain', axis='x', useOffset=False)
         
-        # 转换为base64
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
-        
-        return img_base64
+        return fig
 
 
 class MonteCarloSimulator:
@@ -1257,7 +1244,7 @@ class MonteCarloSimulator:
     
     def plot_result(self, figsize=(15, 10), trim_percentile=0.05):
         """
-        绘制结果的多种统计图,返回base64编码的图片
+        绘制结果的多种统计图，返回 matplotlib Figure。
         
         Parameters:
         -----------
@@ -1414,14 +1401,7 @@ class MonteCarloSimulator:
         ax3.set_ylim(-0.05, 1.05)
         ax3.set_xlim(x_min_display, x_max_display)
         
-        # 转换为base64
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
-        
-        return img_base64
+        return fig
     
     def generate_report(self, confidence_levels: List[float] = [0.95, 0.99]):
         """
@@ -2028,14 +2008,7 @@ class MonteCarloSimulator:
         ax1.grid(True, alpha=0.3, axis='y')
         fig.tight_layout()
         
-        # 转换为base64
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
-        
-        return img_base64
+        return fig
     
     def plot_tornado_chart(self, figsize=None):
         """
@@ -2090,11 +2063,4 @@ class MonteCarloSimulator:
         ax.legend(handles=legend_elements, loc='best', fontsize=11)
         fig.tight_layout()
         
-        # 转换为base64
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        plt.close(fig)
-        
-        return img_base64
+        return fig

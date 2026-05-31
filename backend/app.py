@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import zipfile
 import io
 import base64
+import matplotlib.pyplot as plt
 
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
@@ -22,6 +23,16 @@ app.secret_key = secrets.token_hex(32)
 # 存储每个用户的模拟器实例
 user_simulators = {}
 user_last_access = {}
+
+
+def figure_to_base64(fig, bbox_inches='tight'):
+    """Convert a matplotlib Figure to base64 PNG for web responses."""
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=100, bbox_inches=bbox_inches)
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+    plt.close(fig)
+    return img_base64
 
 # 控制自定义代码执行（默认禁止，需设置 ALLOW_CUSTOM_CODE=1 才启用）
 ALLOW_CUSTOM_CODE = os.getenv("ALLOW_CUSTOM_CODE", "0") == "1"
@@ -387,7 +398,7 @@ def generate_charts():
             if 'result_plot' in simulator.chart_cache:
                 charts['result_plot'] = simulator.chart_cache['result_plot']
             else:
-                img_base64 = simulator.plot_result()
+                img_base64 = figure_to_base64(simulator.plot_result())
                 simulator.chart_cache['result_plot'] = img_base64
                 charts['result_plot'] = img_base64
         
@@ -399,7 +410,7 @@ def generate_charts():
                 if cache_key in simulator.chart_cache:
                     var_charts[var_name] = simulator.chart_cache[cache_key]
                 else:
-                    img_base64 = var.plot_distribution(show_samples=True)
+                    img_base64 = figure_to_base64(var.plot_distribution(show_samples=True))
                     simulator.chart_cache[cache_key] = img_base64
                     var_charts[var_name] = img_base64
             charts['var_distributions'] = var_charts
@@ -409,7 +420,7 @@ def generate_charts():
             if 'pareto' in simulator.chart_cache:
                 charts['pareto'] = simulator.chart_cache['pareto']
             else:
-                img_base64 = simulator.plot_pareto_chart()
+                img_base64 = figure_to_base64(simulator.plot_pareto_chart(), bbox_inches=None)
                 simulator.chart_cache['pareto'] = img_base64
                 charts['pareto'] = img_base64
         
@@ -418,7 +429,7 @@ def generate_charts():
             if 'tornado' in simulator.chart_cache:
                 charts['tornado'] = simulator.chart_cache['tornado']
             else:
-                img_base64 = simulator.plot_tornado_chart()
+                img_base64 = figure_to_base64(simulator.plot_tornado_chart(), bbox_inches=None)
                 simulator.chart_cache['tornado'] = img_base64
                 charts['tornado'] = img_base64
         
@@ -575,17 +586,17 @@ def download_full_zip():
         
         # 如果图表还没生成，先生成
         if 'result_plot' not in simulator.chart_cache:
-            simulator.chart_cache['result_plot'] = simulator.plot_result()
+            simulator.chart_cache['result_plot'] = figure_to_base64(simulator.plot_result())
         if 'pareto' not in simulator.chart_cache and simulator.sensitivity_results:
-            simulator.chart_cache['pareto'] = simulator.plot_pareto_chart()
+            simulator.chart_cache['pareto'] = figure_to_base64(simulator.plot_pareto_chart(), bbox_inches=None)
         if 'tornado' not in simulator.chart_cache and simulator.sensitivity_results:
-            simulator.chart_cache['tornado'] = simulator.plot_tornado_chart()
+            simulator.chart_cache['tornado'] = figure_to_base64(simulator.plot_tornado_chart(), bbox_inches=None)
         
         # 生成变量分布图
         for var_name, var in simulator.variables.items():
             cache_key = f'var_dist_{var_name}'
             if cache_key not in simulator.chart_cache:
-                simulator.chart_cache[cache_key] = var.plot_distribution()
+                simulator.chart_cache[cache_key] = figure_to_base64(var.plot_distribution())
         
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
