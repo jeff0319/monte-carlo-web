@@ -108,7 +108,7 @@
                         throw new Error('input.json must contain a variables object');
                     }
 
-                    const variablesText = JSON.stringify(variables, null, 2);
+                    const variablesText = stringifyVariablesCompactData(variables);
                     const jsonInput = document.getElementById('jsonInput');
                     jsonInput.value = variablesText;
                     adjustTextareaHeight(jsonInput, variablesText);
@@ -152,6 +152,27 @@
                 fileInput.value = '';
             };
             reader.readAsText(file);
+        }
+
+        function stringifyVariablesCompactData(variables) {
+            const cloned = JSON.parse(JSON.stringify(variables));
+            const replacements = [];
+            let tokenIndex = 0;
+
+            for (const variable of Object.values(cloned)) {
+                if (variable && Array.isArray(variable.data)) {
+                    const token = `__DATA_PLACEHOLDER_${tokenIndex}__`;
+                    tokenIndex += 1;
+                    replacements.push([token, JSON.stringify(variable.data)]);
+                    variable.data = token;
+                }
+            }
+
+            let rendered = JSON.stringify(cloned, null, 2);
+            for (const [token, compactData] of replacements) {
+                rendered = rendered.replace(`"${token}"`, compactData);
+            }
+            return rendered;
         }
 
         function updateVariableList(variables) {
