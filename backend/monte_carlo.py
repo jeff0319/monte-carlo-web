@@ -349,6 +349,31 @@ class Variable:
             bins = int(np.ceil(data_range / bin_width)) if bin_width > 0 else int(np.sqrt(len(data)))
         return int(np.clip(bins, 20, 80))
 
+    def _finite_values(self, data):
+        """Return finite values only, so legend stats stay stable with constrained tails."""
+        data = np.asarray(data, dtype=float)
+        return data[np.isfinite(data)]
+
+    def _format_stat_value(self, value):
+        return f"{value:.3f}"
+
+    def _mean_legend_label(self, label, data):
+        finite_data = self._finite_values(data)
+        if len(finite_data) == 0:
+            return label
+        return f"{label}\nmean={self._format_stat_value(np.mean(finite_data))}"
+
+    def _sample_legend_label(self, label, data):
+        finite_data = self._finite_values(data)
+        if len(finite_data) == 0:
+            return label
+        p50 = np.percentile(finite_data, 50)
+        mean = np.mean(finite_data)
+        return (
+            f"{label}\n"
+            f"P50={self._format_stat_value(p50)}, mean={self._format_stat_value(mean)}"
+        )
+
     def _plot_bootstrap_distribution(self, ax, samples_for_plot=None, show_samples=True):
         """Plot bootstrap as an empirical probability distribution, not a continuous PDF."""
         source_data = self._bootstrap_source_data()
@@ -371,7 +396,7 @@ class Variable:
             weights=source_weights,
             histtype='step',
             linewidth=2.2,
-            label='Bootstrap Source Data',
+            label=self._mean_legend_label('Bootstrap Source Data', source_data),
             color='steelblue',
             zorder=3,
         )
@@ -386,7 +411,7 @@ class Variable:
                 bins=bins,
                 weights=sample_weights,
                 alpha=0.45,
-                label='Bootstrap Samples',
+                label=self._sample_legend_label('Bootstrap Samples', plot_samples),
                 color='green',
                 edgecolor='darkgreen',
                 linewidth=0.5,
@@ -429,7 +454,7 @@ class Variable:
                 bins=bins,
                 density=True,
                 alpha=0.48,
-                label='Bootstrap Mean Samples',
+                label=self._sample_legend_label('Bootstrap Mean Samples', plot_samples),
                 color='green',
                 edgecolor='darkgreen',
                 linewidth=0.5,
@@ -437,7 +462,7 @@ class Variable:
             )
 
         ax.axvline(raw_mean, color='steelblue', linestyle='--', linewidth=2.0,
-                   label=f'Raw Mean: {raw_mean:.4g}', zorder=3)
+                   label=f'Raw Data\nmean={self._format_stat_value(raw_mean)}', zorder=3)
 
         if len(source_data) <= 50:
             y_min, y_max = ax.get_ylim()
@@ -682,7 +707,8 @@ class Variable:
 
         if has_samples:
             counts, bins, patches = ax.hist(plot_samples, bins=_smart_bins(plot_samples, x_min, x_max), density=True, alpha=0.3,
-                   label='Monte Carlo Samples', color='green', edgecolor='darkgreen',
+                   label=self._sample_legend_label('Monte Carlo Samples', plot_samples),
+                   color='green', edgecolor='darkgreen',
                    linewidth=0.5, zorder=1)
             hist_max = max(hist_max, np.max(counts))
 
@@ -697,7 +723,8 @@ class Variable:
                 y_min = min(y_positions) - pad  # 给散点直径留空间
                 y_min = min(y_min, -0.2 * max_pdf)  # 保证有负向留白
                 ax.scatter(self.raw_data, y_positions, alpha=0.5, s=60,
-                           label='Raw Data', color='steelblue', zorder=5,
+                           label=self._mean_legend_label('Raw Data', self.raw_data),
+                           color='steelblue', zorder=5,
                            clip_on=False)
                 ax.set_ylim(y_min, max_pdf * 1.1)
                 ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, alpha=0.5, zorder=2)
@@ -711,7 +738,8 @@ class Variable:
 
                 counts, bins, patches = ax.hist(raw_data_for_plot,
                        bins=_smart_bins(raw_data_for_plot, x_min, x_max),
-                       density=True, alpha=0.5, label='Raw Data',
+                       density=True, alpha=0.5,
+                       label=self._mean_legend_label('Raw Data', self.raw_data),
                        color='steelblue', edgecolor='darkblue', zorder=2)
                 hist_max = max(hist_max, np.max(counts))
 
