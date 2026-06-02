@@ -48,25 +48,56 @@
                     <div class="collapsible-content">
                         <div class="example-section">
                             <h4>字段说明</h4>
-                            <div class="help-text">
-                                <strong>必填字段:</strong>
-                                <ul style="margin: 8px 0; padding-left: 20px;">
-                                    <li><code>type</code>: "data" (使用实测数据) 或 "params" (使用统计参数)</li>
-                                    <li><code>distribution</code>: 分布类型（见下方支持的9种分布；data + bootstrap 时可省略，默认 normal）</li>
-                                </ul>
-                                <strong>可选字段:</strong>
-                                <ul style="margin: 8px 0; padding-left: 20px;">
-                                    <li><code>min_limit</code>, <code>max_limit</code>: 限制采样范围</li>
-                                    <li><code>sampling_method</code>: 仅 data 类型使用，可选 <code>fit</code> 或 <code>bootstrap</code>，默认 <code>bootstrap</code></li>
-                                    <li><code>bootstrap_statistic</code>: 仅 <code>sampling_method="bootstrap"</code> 时使用，可选 <code>mean</code> 或 <code>value</code>，默认 <code>mean</code></li>
-                                </ul>
-                                <strong>Data 类型需要:</strong> <code>values</code> (数组)
-                                <br>
-                                <strong>Data 抽样方式:</strong> <code>fit</code> 会先拟合指定分布再抽样；<code>bootstrap</code> 不强制假设分布。<code>bootstrap_statistic="mean"</code> 表示每轮有放回抽取原始样本量的数据并取均值，适合计算均值估计量的不确定性；<code>bootstrap_statistic="value"</code> 表示每轮直接抽一个原始观测值，适合传播单次观测值的经验分布。使用 <code>min_limit</code>/<code>max_limit</code> 时，bootstrap 会先过滤原始数据，再从过滤后的数据抽样。当前 bootstrap 按变量独立抽样，不保留多个变量原始数据之间的行配对关系。
-                                <br>
-                                <strong>Params 类型需要:</strong> 根据分布类型不同而不同（见下方各分布参数说明）
-                                <br>
-                                <strong>字段别名:</strong> 也支持 <code>input_mode</code>/<code>data</code>/<code>dist_type</code>/<code>min_value</code>/<code>max_value</code>。
+                            <div class="field-guide">
+                                <div class="field-grid">
+                                    <div class="field-panel">
+                                        <h5>基础字段</h5>
+                                        <dl>
+                                            <dt><code>type</code></dt>
+                                            <dd><code>data</code> 使用实测数据；<code>params</code> 使用统计参数。</dd>
+                                            <dt><code>values</code></dt>
+                                            <dd>仅 <code>data</code> 类型需要，填写原始数据数组。</dd>
+                                            <dt><code>distribution</code></dt>
+                                            <dd><code>params</code> 和 <code>data + fit</code> 使用；<code>data + bootstrap</code> 可省略。</dd>
+                                        </dl>
+                                    </div>
+                                    <div class="field-panel">
+                                        <h5>可选字段</h5>
+                                        <dl>
+                                            <dt><code>sampling_method</code></dt>
+                                            <dd>仅 <code>data</code> 类型使用：<code>bootstrap</code> 或 <code>fit</code>，默认 <code>bootstrap</code>。</dd>
+                                            <dt><code>bootstrap_statistic</code></dt>
+                                            <dd>仅 bootstrap 使用：<code>mean</code> 或 <code>value</code>，默认 <code>mean</code>。</dd>
+                                            <dt><code>min_limit</code> / <code>max_limit</code></dt>
+                                            <dd>额外限制采样范围；bootstrap 会先过滤原始数据。</dd>
+                                        </dl>
+                                    </div>
+                                </div>
+
+                                <div class="mode-grid">
+                                    <div class="mode-panel">
+                                        <h5><code>data + bootstrap</code></h5>
+                                        <p>从原始数据有放回抽样，不假设理论分布。</p>
+                                        <p><code>distribution</code> 不决定抽样形状。</p>
+                                    </div>
+                                    <div class="mode-panel">
+                                        <h5><code>data + fit</code></h5>
+                                        <p>先用原始数据拟合 <code>distribution</code>，再从拟合分布抽样。</p>
+                                        <p><code>bootstrap_statistic</code> 不生效。</p>
+                                    </div>
+                                    <div class="mode-panel">
+                                        <h5><code>params</code></h5>
+                                        <p>直接使用分布参数，例如 <code>mean</code>/<code>std</code> 或 <code>min</code>/<code>max</code>。</p>
+                                        <p>不使用 <code>values</code> 和 <code>sampling_method</code>。</p>
+                                    </div>
+                                </div>
+
+                                <div class="field-notes">
+                                    <span><code>bootstrap_statistic="mean"</code> 表示每轮重抽原始样本量并取均值；<code>"value"</code> 表示每轮抽一个观测值。</span>
+                                    <span><code>min</code>/<code>max</code> 是分布参数，<code>min_limit</code>/<code>max_limit</code> 是采样截断范围。</span>
+                                    <span>指数分布的 <code>scale</code> 和 <code>rate</code> 二选一；当前 bootstrap 按变量独立抽样，不保留行配对关系。</span>
+                                    <span>字段别名：<code>input_mode</code>/<code>data</code>/<code>dist_type</code>/<code>min_value</code>/<code>max_value</code>。</span>
+                                </div>
                             </div>
 
                             <h4>支持的9种概率分布</h4>
@@ -147,7 +178,7 @@
                                 <div class="help-text">默认使用 <code>bootstrap_statistic="mean"</code>，适合公式中的变量代表一组测试值的均值。</div>
                             </div>
 
-                            <h4>示例 2: t 分布 (Student's t)</h4>
+                            <h4>示例 2: 拟合 t 分布 (Data + fit)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
@@ -156,15 +187,18 @@
     "values": [43.90, 80.05, 60.24, 90.22, 109.52, 84.03, 101.04, 84.60, 73.26, 62.71, 80.72, 85.11, 65.42, 51.02, 133.96,
 224.57, 96.98, 55.98, 112.91, 158.73, 63.67, 53.70, 45.55, 89.25],
     "distribution": "t",
+    "sampling_method": "fit",
     "min_limit": 0.1
   },
   "C": {
     "type": "data",
     "values": [1255.80,1168.12, 1275.73, 1164.53, 1119.68, 1123.21, 1078.96, 955.83, 1309.05],
     "distribution": "t",
+    "sampling_method": "fit",
     "min_limit": 500
   }
 }</code></pre>
+                                <div class="help-text"><code>sampling_method="fit"</code> 会根据原始数据拟合指定分布；如果省略该字段，data 类型默认会走 bootstrap。</div>
                             </div>
 
                             <h4>示例 3: Bootstrap 单个观测值 (Data)</h4>
@@ -181,14 +215,15 @@
                                 <div class="help-text">适用于公式中的变量代表一次随机观测，而不是一组测试值的均值。</div>
                             </div>
 
-                            <h4>示例 4: 正态分布 (Normal)</h4>
+                            <h4>示例 4: 正态分布 (Params 与 Data + fit)</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
   "测量值": {
     "type": "data",
     "values": [10.5, 11.2, 9.8, 10.1, 10.7, 11.0, 10.3],
-    "distribution": "normal"
+    "distribution": "normal",
+    "sampling_method": "fit"
   },
   "理论值": {
     "type": "params",
@@ -197,6 +232,7 @@
     "distribution": "normal"
   }
 }</code></pre>
+                                <div class="help-text">上面的 <code>测量值</code> 会先从原始数据拟合 normal；<code>理论值</code> 直接使用给定的 normal 参数。</div>
                             </div>
 
                             <h4>示例 5: 对数正态分布 (Lognormal)</h4>
@@ -329,7 +365,7 @@
 }</code></pre>
                             </div>
 
-                            <h4>示例 11: 带限值约束</h4>
+                            <h4>示例 13: 带限值约束</h4>
                             <div class="example-code">
                                 <button class="copy-btn" onclick="copyExample(this, 'jsonInput')">📋 Copy</button>
 <pre><code>{
