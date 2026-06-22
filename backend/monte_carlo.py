@@ -349,6 +349,27 @@ class Variable:
             bins = int(np.ceil(data_range / bin_width)) if bin_width > 0 else int(np.sqrt(len(data)))
         return int(np.clip(bins, 20, 80))
 
+    def _discrete_probability_mass(self, data):
+        """Return sorted unique values and their probability mass."""
+        data = np.asarray(data)
+        if len(data) == 0:
+            return np.array([]), np.array([])
+        values, counts = np.unique(data, return_counts=True)
+        return values, counts / counts.sum()
+
+    def _discrete_bar_width(self, values):
+        """Choose a visible, non-overlapping bar width for discrete x values."""
+        values = np.asarray(values)
+        if len(values) <= 1:
+            center = values[0] if len(values) == 1 else 1
+            return max(abs(center) * 0.02, 1e-6)
+
+        gaps = np.diff(np.sort(values))
+        positive_gaps = gaps[gaps > 0]
+        if len(positive_gaps) == 0:
+            return max(abs(values[0]) * 0.02, 1e-6)
+        return max(np.min(positive_gaps) * 0.72, np.finfo(float).eps)
+
     def _finite_values(self, data):
         """Return finite values only, so legend stats stay stable with constrained tails."""
         data = np.asarray(data, dtype=float)
@@ -385,40 +406,38 @@ class Variable:
             return
 
         plot_samples = samples_for_plot if samples_for_plot is not None else self.samples
-        combined = source_data if plot_samples is None else np.concatenate([source_data, plot_samples])
-        bins = self._bootstrap_hist_bins(combined)
+        source_values, source_prob = self._discrete_probability_mass(source_data)
+        width = self._discrete_bar_width(source_values)
+        max_probability = np.max(source_prob) if len(source_prob) > 0 else 0
 
-        max_probability = 0
-        source_weights = np.ones(len(source_data)) / len(source_data)
-        source_counts, _, _ = ax.hist(
-            source_data,
-            bins=bins,
-            weights=source_weights,
-            histtype='step',
+        ax.vlines(
+            source_values,
+            0,
+            source_prob,
             linewidth=2.2,
             label=self._mean_legend_label('Bootstrap Source Data', source_data),
             color='steelblue',
-            zorder=3,
+            zorder=4,
         )
-        if len(source_counts) > 0:
-            max_probability = max(max_probability, np.max(source_counts))
+        ax.scatter(source_values, source_prob, s=55, color='steelblue', zorder=5)
 
         has_samples = plot_samples is not None and show_samples
         if has_samples:
-            sample_weights = np.ones(len(plot_samples)) / len(plot_samples)
-            sample_counts, _, _ = ax.hist(
-                plot_samples,
-                bins=bins,
-                weights=sample_weights,
-                alpha=0.45,
+            sample_values, sample_prob = self._discrete_probability_mass(plot_samples)
+            ax.bar(
+                sample_values,
+                sample_prob,
+                width=width,
+                align='center',
+                alpha=0.42,
                 label=self._sample_legend_label('Bootstrap Samples', plot_samples),
                 color='green',
                 edgecolor='darkgreen',
                 linewidth=0.5,
                 zorder=2,
             )
-            if len(sample_counts) > 0:
-                max_probability = max(max_probability, np.max(sample_counts))
+            if len(sample_prob) > 0:
+                max_probability = max(max_probability, np.max(sample_prob))
 
         if len(source_data) <= 50:
             rug_y = np.full(len(source_data), -0.03 * max(max_probability, 1e-8))
@@ -426,12 +445,12 @@ class Variable:
                        label='Source Observations', color='black', zorder=4,
                        clip_on=False)
 
-        data_min = np.min(combined)
-        data_max = np.max(combined)
+        data_min = np.min(source_values)
+        data_max = np.max(source_values)
         if data_max == data_min:
-            padding = max(abs(data_min) * 0.1, 1)
+            padding = max(abs(data_min) * 0.08, width * 3, 1e-6)
         else:
-            padding = 0.08 * (data_max - data_min)
+            padding = max(0.08 * (data_max - data_min), width)
         ax.set_xlim(data_min - padding, data_max + padding)
         ax.set_ylim(-0.08 * max(max_probability, 1e-8), max_probability * 1.18)
         ax.set_xlabel('Value', fontsize=12)
