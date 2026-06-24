@@ -9,7 +9,7 @@ services:
     restart: unless-stopped
     environment:
       - FLASK_ENV=production
-      - ALLOW_CUSTOM_CODE=1
+      - ADVANCED_FUNCTION_PASSWORD=${ADVANCED_FUNCTION_PASSWORD}
     volumes:
       - ./backend:/app/backend
       - ./frontend:/app/frontend

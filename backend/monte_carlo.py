@@ -792,6 +792,8 @@ class MonteCarloSimulator:
         self.result = None
         self.result_name = 'Result'
         self.formula_str = None
+        self.formula_type = 'simple'
+        self.custom_function_code = None
         self.n_samples = None
         self.random_seed = None
         self.confidence_levels = [0.90, 0.95, 0.99]  # 默认置信水平
@@ -936,7 +938,8 @@ class MonteCarloSimulator:
     
     def run_simulation(self, formula: Callable, result_name: str = 'Result', 
                       n_samples: int = 100000, formula_str: str = None,
-                      cdf_fit_degree: int = 5, random_seed: int = 4545):
+                      cdf_fit_degree: int = 5, random_seed: int = 4545,
+                      formula_type: str = 'simple', custom_function_code: str = None):
         """
         运行Monte Carlo模拟
         """
@@ -945,6 +948,8 @@ class MonteCarloSimulator:
         
         self.result_name = result_name
         self.formula_str = formula_str
+        self.formula_type = formula_type
+        self.custom_function_code = custom_function_code
         self.cdf_fit_degree = cdf_fit_degree
         self.n_samples = n_samples
         self.random_seed = random_seed
@@ -1015,10 +1020,23 @@ class MonteCarloSimulator:
                 params[key] = float(value)
         return params
 
+    def _format_dist_params(self, var: "Variable") -> str:
+        """Format distribution parameters for report metadata."""
+        if var.dist_params is None:
+            return "N/A"
+
+        params = self._params_from_dist(var)
+        if not params:
+            return "N/A"
+
+        return ", ".join(f"{key}={value:.6f}" for key, value in params.items())
+
     def _build_input_payload(self, include_data: bool = True, max_data_points: Optional[int] = None) -> dict:
         """Build a JSON-serializable snapshot of the input config."""
         payload = {
+            'formula_type': self.formula_type,
             'formula': self.formula_str if self.formula_str else None,
+            'custom_function_code': self.custom_function_code if self.formula_type == 'advanced' else None,
             'result_name': self.result_name,
             'n_samples': int(self.n_samples) if self.n_samples is not None else (len(self.result) if self.result is not None else None),
             'cdf_fit_degree': self.cdf_fit_degree,
@@ -1336,13 +1354,28 @@ class MonteCarloSimulator:
             x_max_display = self.result.max()
             data_in_range = result_for_plot
 
-        # 简化的智能bins策略（3档分级）
+        # 自适应 bins：连续结果用 Freedman-Diaconis，离散/重复结果保留更多细节。
         def _smart_bins(data, xmin=None, xmax=None):
             data = np.asarray(data)
             if xmin is not None and xmax is not None:
                 data = data[(data >= xmin) & (data <= xmax)]
             if len(data) == 0:
                 return 50
+
+            unique_vals = np.unique(data)
+            unique_count = len(unique_vals)
+            if unique_count <= 1:
+                return 50
+            if unique_count <= 150:
+                mids = (unique_vals[:-1] + unique_vals[1:]) / 2
+                first_width = mids[0] - unique_vals[0]
+                last_width = unique_vals[-1] - mids[-1]
+                return np.concatenate((
+                    [unique_vals[0] - first_width],
+                    mids,
+                    [unique_vals[-1] + last_width],
+                ))
+
             data_range = data.max() - data.min()
             iqr = np.subtract(*np.percentile(data, [75, 25])) if len(data) > 1 else 0
             if data_range == 0:
@@ -1353,10 +1386,15 @@ class MonteCarloSimulator:
             if bin_width <= 0:
                 return 50
             bins = int(np.ceil(data_range / bin_width))
-            # 结果分布图用于报告阅读，bin 数不要随大样本过度变密。
-            if data_range <= 0.2 * abs(np.mean(data)) if np.mean(data) != 0 else data_range:
-                return int(np.clip(bins, 30, 80))
-            return int(np.clip(bins, 30, 70))
+
+            # Bootstrap value 组合出的结果常是离散重复值；此时 FD 会过度合并相邻取值。
+            unique_ratio = unique_count / len(data)
+            if unique_ratio <= 0.05 and unique_count <= 2000:
+                detail_bins = min(240, max(80, int(np.ceil(unique_count / 2))))
+                bins = max(bins, detail_bins)
+
+            max_bins = min(240, max(100, int(np.sqrt(len(data)) * 0.55)))
+            return int(np.clip(bins, 40, max_bins))
 
         n_bins = _smart_bins(data_in_range, x_min_display, x_max_display)
         
@@ -1635,10 +1673,9 @@ class MonteCarloSimulator:
                     report_lines.append("  Distribution: empirical bootstrap values")
             else:
                 report_lines.append(f"  Distribution: {var.dist_type}")
-            if var.dist_params is not None and var.dist_type == 'norm':
-                report_lines.append(f"  Parameters: μ={var.dist_params[0]:.6f}, σ={var.dist_params[1]:.6f}")
-            elif var.dist_params is not None and var.dist_type == 't':
-                report_lines.append(f"  Parameters: df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}")
+            params_text = self._format_dist_params(var)
+            if params_text != "N/A" and var.sampling_method != 'bootstrap':
+                report_lines.append(f"  Parameters: {params_text}")
             if var.min_value is not None or var.max_value is not None:
                 report_lines.append(f"  Limits: [{var.min_value if var.min_value is not None else '-∞'}, {var.max_value if var.max_value is not None else '+∞'}]")
             if var.input_mode == 'data' and var.raw_data is not None:
@@ -1659,7 +1696,11 @@ class MonteCarloSimulator:
             report_lines.append("")
         
         # 公式
-        if self.formula_str:
+        if self.formula_type == 'advanced' and self.custom_function_code:
+            report_lines.append("=== Advanced Function ===")
+            report_lines.append(self.custom_function_code)
+            report_lines.append("")
+        elif self.formula_str:
             report_lines.append("=== Formula ===")
             report_lines.append(self.formula_str)
             report_lines.append("")
@@ -1682,7 +1723,13 @@ class MonteCarloSimulator:
         # Metadata部分 - 更清晰的标题
         lines.append("# MONTE CARLO SIMULATION RESULTS")
         lines.append(f"# Simulation_Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"# Formula: {self.formula_str if self.formula_str else 'N/A'}")
+        lines.append(f"# Formula_Type: {self.formula_type}")
+        formula_display = (
+            json.dumps(self.custom_function_code, ensure_ascii=False)
+            if self.formula_type == 'advanced' and self.custom_function_code
+            else self.formula_str
+        )
+        lines.append(f"# Formula: {formula_display if formula_display else 'N/A'}")
         lines.append(f"# Result_Name: {self.result_name}")
         lines.append(f"# Number_of_Samples: {len(self.result)}")
         lines.append(f"# Sample_Limit: {max_samples}")
@@ -1692,15 +1739,10 @@ class MonteCarloSimulator:
         lines.append("# === VARIABLE CONFIGURATIONS ===")
         lines.append("# Name, Input_Mode, Sampling_Method, Bootstrap_Statistic, Distribution, Parameters, Limits")
         for var_name, var in self.variables.items():
-            # 分布参数
             if var.sampling_method == 'bootstrap':
                 params = f"bootstrap {var.bootstrap_statistic}"
-            elif var.dist_type == 'norm':
-                params = f"mean={var.dist_params[0]:.6f}, std={var.dist_params[1]:.6f}"
-            elif var.dist_type == 't':
-                params = f"df={var.dist_params[0]:.2f}, loc={var.dist_params[1]:.6f}, scale={var.dist_params[2]:.6f}"
             else:
-                params = "N/A"
+                params = self._format_dist_params(var)
             
             # 限制条件
             limits = ""
@@ -1853,7 +1895,9 @@ class MonteCarloSimulator:
         data = {
             'metadata': {
                 'simulation_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'formula_type': self.formula_type,
                 'formula': self.formula_str if self.formula_str else None,
+                'custom_function_code': self.custom_function_code if self.formula_type == 'advanced' else None,
                 'result_name': self.result_name,
                 'n_samples': len(self.result)
             },

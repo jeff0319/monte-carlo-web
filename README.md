@@ -21,8 +21,15 @@
 ### Docker Compose（推荐）
 
 ```bash
+export ADVANCED_FUNCTION_PASSWORD='your-password'
 docker-compose up -d
 # 访问 http://localhost:5050
+```
+
+也可以在项目根目录创建 `.env`，避免每次手动 `export`：
+
+```env
+ADVANCED_FUNCTION_PASSWORD=your-password
 ```
 
 ### 本地运行
@@ -30,8 +37,15 @@ docker-compose up -d
 ```bash
 cd backend
 pip install -r requirements.txt
+export ADVANCED_FUNCTION_PASSWORD='your-password'
 python app.py
 ```
+
+## 高级 Python 函数密码
+
+选择网页中的 `Advanced (Python Function)` 时，需要在 `Advanced Function Password` 输入框里填写 `ADVANCED_FUNCTION_PASSWORD` 对应的密码。`Simple Formula` 不需要密码。
+
+高级函数会在服务器上执行 Python 代码，只适合受信环境使用。密码不会写入 `input.json`，也不会随报告导出；导入 `input.json` 只会恢复函数代码，真正运行高级函数时仍需输入密码。
 
 ## 原始数据输入
 

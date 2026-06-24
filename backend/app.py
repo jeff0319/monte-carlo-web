@@ -34,8 +34,8 @@ def figure_to_base64(fig, bbox_inches='tight'):
     plt.close(fig)
     return img_base64
 
-# 控制自定义代码执行（默认禁止，需设置 ALLOW_CUSTOM_CODE=1 才启用）
-ALLOW_CUSTOM_CODE = os.getenv("ALLOW_CUSTOM_CODE", "0") == "1"
+# 高级函数密码（设置 ADVANCED_FUNCTION_PASSWORD 后启用高级函数）
+ADVANCED_FUNCTION_PASSWORD = os.getenv("ADVANCED_FUNCTION_PASSWORD", "")
 ALLOWED_FUNCTIONS = {
     'np': np,
     'sin': np.sin,
@@ -48,6 +48,7 @@ ALLOWED_FUNCTIONS = {
     'sqrt': np.sqrt,
     'abs': np.abs,
     'pow': np.power,
+    'where': np.where,
 }
 ALLOWED_NODES = {
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call,
@@ -113,6 +114,22 @@ def build_formula_lambda(formula_str, var_names):
         return eval(code, {"__builtins__": {}, **ALLOWED_FUNCTIONS}, local_vars)
 
     return _formula
+
+
+def build_custom_formula(custom_function_code):
+    if not custom_function_code or not custom_function_code.strip():
+        raise ValueError('高级函数不能为空')
+
+    namespace = {
+        'np': np,
+        'numpy': np,
+        **ALLOWED_FUNCTIONS,
+    }
+    exec(custom_function_code, namespace)
+    formula_func = namespace.get('custom_formula')
+    if not callable(formula_func):
+        raise ValueError('Custom function must be named "custom_formula"')
+    return formula_func
 
 def get_user_simulator():
     """获取当前用户的模拟器实例"""
@@ -329,32 +346,39 @@ def run_simulation():
         cdf_fit_degree = data.get('cdf_fit_degree', 5)  # CDF拟合次数
         use_custom_function = data.get('use_custom_function', False)
         custom_function_code = data.get('custom_function_code', '')
+        advanced_function_password = data.get('advanced_function_password', '')
         random_seed = data.get('random_seed', 4545)
         
         # 创建函数
         var_names = list(simulator.variables.keys())
         
         if use_custom_function and custom_function_code:
-            if not ALLOW_CUSTOM_CODE:
-                return jsonify({'error': '自定义代码执行已禁用，请设置环境变量 ALLOW_CUSTOM_CODE=1 启用（仅限受信环境）'}), 403
-            # 使用自定义 Python 函数
-            # 创建一个安全的命名空间
-            safe_namespace = {**ALLOWED_FUNCTIONS}
-            
-            # 执行自定义函数代码
-            exec(custom_function_code, safe_namespace)
-            
-            # 获取函数（假设函数名为 custom_formula）
-            if 'custom_formula' not in safe_namespace:
-                return jsonify({'error': 'Custom function must be named "custom_formula"'}), 400
-            
-            formula_func = safe_namespace['custom_formula']
+            if not ADVANCED_FUNCTION_PASSWORD:
+                return jsonify({'error': '高级函数密码未配置，请设置环境变量 ADVANCED_FUNCTION_PASSWORD'}), 403
+            if not secrets.compare_digest(str(advanced_function_password), ADVANCED_FUNCTION_PASSWORD):
+                return jsonify({'error': '高级函数密码错误'}), 403
+            formula_func = build_custom_formula(custom_function_code)
+            formula_type = 'advanced'
+            stored_formula = None
+            stored_custom_function = custom_function_code
         else:
             # 使用经过AST校验的安全公式
             formula_func = build_formula_lambda(formula_str, var_names)
+            formula_type = 'simple'
+            stored_formula = formula_str
+            stored_custom_function = None
         
         # 运行模拟（包含CDF拟合）
-        simulator.run_simulation(formula_func, result_name, n_samples, formula_str, cdf_fit_degree, random_seed)
+        simulator.run_simulation(
+            formula_func,
+            result_name,
+            n_samples,
+            stored_formula,
+            cdf_fit_degree,
+            random_seed,
+            formula_type,
+            stored_custom_function,
+        )
         
         return jsonify({
             'success': True,

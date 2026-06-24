@@ -26,21 +26,19 @@
         }
 
         // Toggle formula input type
+        function setFormulaInputType(type) {
+            const isAdvanced = type === 'advanced';
+            document.getElementById('simpleFormula').checked = !isAdvanced;
+            document.getElementById('advancedFormula').checked = isAdvanced;
+            document.getElementById('simpleFormulaDiv').style.display = isAdvanced ? 'none' : 'block';
+            document.getElementById('advancedFormulaDiv').style.display = isAdvanced ? 'block' : 'none';
+            document.getElementById('simpleFormulaExamples').style.display = isAdvanced ? 'none' : 'block';
+            document.getElementById('advancedFormulaExamples').style.display = isAdvanced ? 'block' : 'none';
+        }
+
         document.querySelectorAll('input[name="formulaType"]').forEach(radio => {
             radio.addEventListener('change', function() {
-                if (this.value === 'simple') {
-                    // 显示 Simple Formula 输入框和示例
-                    document.getElementById('simpleFormulaDiv').style.display = 'block';
-                    document.getElementById('advancedFormulaDiv').style.display = 'none';
-                    document.getElementById('simpleFormulaExamples').style.display = 'block';
-                    document.getElementById('advancedFormulaExamples').style.display = 'none';
-                } else {
-                    // 显示 Advanced Formula 输入框和示例
-                    document.getElementById('simpleFormulaDiv').style.display = 'none';
-                    document.getElementById('advancedFormulaDiv').style.display = 'block';
-                    document.getElementById('simpleFormulaExamples').style.display = 'none';
-                    document.getElementById('advancedFormulaExamples').style.display = 'block';
-                }
+                setFormulaInputType(this.value);
             });
         });
 
@@ -113,13 +111,13 @@
                     jsonInput.value = variablesText;
                     adjustTextareaHeight(jsonInput, variablesText);
 
-                    if (payload.formula) {
-                        document.getElementById('simpleFormula').checked = true;
-                        document.getElementById('advancedFormula').checked = false;
-                        document.getElementById('simpleFormulaDiv').style.display = 'block';
-                        document.getElementById('advancedFormulaDiv').style.display = 'none';
-                        document.getElementById('simpleFormulaExamples').style.display = 'block';
-                        document.getElementById('advancedFormulaExamples').style.display = 'none';
+                    if (payload.formula_type === 'advanced' || payload.custom_function_code) {
+                        setFormulaInputType('advanced');
+                        const customFunction = document.getElementById('customFunction');
+                        customFunction.value = payload.custom_function_code || '';
+                        adjustTextareaHeight(customFunction, customFunction.value);
+                    } else if (payload.formula) {
+                        setFormulaInputType('simple');
                         document.getElementById('formula').value = payload.formula;
                     }
 
@@ -250,6 +248,7 @@
                 requestData.use_custom_function = false;
             } else {
                 requestData.custom_function_code = document.getElementById('customFunction').value;
+                requestData.advanced_function_password = document.getElementById('advancedFunctionPassword').value;
                 requestData.use_custom_function = true;
             }
 

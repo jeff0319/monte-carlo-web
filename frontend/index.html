@@ -29,7 +29,7 @@
                             <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-top: 8px;">
                                 <button onclick="document.getElementById('inputJsonFile').click()">Import input.json</button>
                                 <input type="file" id="inputJsonFile" accept=".json,application/json" style="display: none;" onchange="importInputJsonFile(event)">
-                                <div class="help-text" style="margin: 0;">Load the input.json from a report package to restore variables, formula, sample count, CDF degree, and random seed.</div>
+                                <div class="help-text" style="margin: 0;">Load the input.json from a report package to restore variables, formula/function, sample count, CDF degree, and random seed.</div>
                             </div>
                         </div>
                     </div>
@@ -602,7 +602,11 @@
                     <div class="form-group">
                         <label for="customFunction">Custom Python Function</label>
                         <textarea id="customFunction" placeholder="def custom_formula(vars):&#10;    import numpy as np&#10;    return vars['var_A'] + vars['var_B']"></textarea>
-                        <div class="help-text">Function must be named 'custom_formula' and accept 'vars' dict parameter</div>
+                        <div class="help-text">Function must be named 'custom_formula'. Password is required because this runs trusted Python code.</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="advancedFunctionPassword">Advanced Function Password</label>
+                        <input type="password" id="advancedFunctionPassword" autocomplete="current-password" placeholder="Required for Python function">
                     </div>
                 </div>
 
